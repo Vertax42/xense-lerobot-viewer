@@ -26,8 +26,17 @@ import {
   type HistogramBinning,
 } from "@/utils/episodeLengthHistogram";
 import { buildPoseVelocityChartGroups } from "@/utils/poseVelocity";
+import {
+  extractSpatialTrajectory,
+  findSpatialAxisGroups,
+  spatialPointsPerEpisode,
+  type SpatialTrajectory,
+  type SpatialTrajectoryData,
+} from "@/utils/spatialTrajectories";
 import type { VideoInfo, AdjacentEpisodeVideos } from "@/types";
 import { tStandalone } from "@/i18n/standalone";
+
+export type { SpatialTrajectoryData } from "@/utils/spatialTrajectories";
 
 const SERIES_NAME_DELIMITER = CHART_CONFIG.SERIES_NAME_DELIMITER;
 const CHARTABLE_NUMERIC_DTYPES = new Set([
@@ -191,6 +200,21 @@ const MAX_CROSS_EPISODE_FRAMES_PER_EPISODE = parsePositiveIntEnv(
   2500,
   100,
 );
+const MAX_SPATIAL_TRAJECTORY_POINTS = parsePositiveIntEnv(
+  process.env.MAX_SPATIAL_TRAJECTORY_POINTS,
+  120_000,
+  1000,
+);
+const MAX_SPATIAL_TRAJECTORY_POINTS_PER_EPISODE = parsePositiveIntEnv(
+  process.env.MAX_SPATIAL_TRAJECTORY_POINTS_PER_EPISODE,
+  240,
+  2,
+);
+const CROSS_EPISODE_FILE_CONCURRENCY = parsePositiveIntEnv(
+  process.env.CROSS_EPISODE_FILE_CONCURRENCY,
+  8,
+  1,
+);
 const PROGRESS_PARQUET_CANDIDATES = [
   "sarm_progress.parquet",
   "srm_progress.parquet",
@@ -219,6 +243,27 @@ function evenlySampleIndices(length: number, target: number): number[] {
   }
 
   return Array.from(sampled).sort((a, b) => a - b);
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
+  );
+  return results;
 }
 
 function evenlySampleArray<T>(items: T[], maxCount: number): T[] {
@@ -1868,13 +1913,17 @@ export type CrossEpisodeVarianceData = {
   actionNames: string[];
   timeBins: number[];
   variance: number[][];
+  /** Episodes successfully loaded for the bounded statistical sample. */
   numEpisodes: number;
+  /** Actual episode metadata entries in the dataset. */
+  totalEpisodes: number;
   lowMovementEpisodes: LowMovementEpisode[];
   aggVelocity: AggVelocityStat[];
   aggAutocorrelation: AggAutocorrelation | null;
   speedDistribution: SpeedDistEntry[];
   jerkyEpisodes: JerkyEpisode[];
   aggAlignment: AggAlignment | null;
+  spatialTrajectories: SpatialTrajectoryData | null;
 };
 
 export async function loadCrossEpisodeActionVariance(
@@ -1906,12 +1955,13 @@ export async function loadCrossEpisodeActionVariance(
   while (typeof names === "object" && names !== null && !Array.isArray(names)) {
     names = Object.values(names)[0];
   }
-  const actionNames = Array.isArray(names)
-    ? (names as string[]).map((n) => `${actionKey}${SERIES_NAME_DELIMITER}${n}`)
-    : Array.from(
-        { length: actionDim },
-        (_, i) => `${actionKey}${SERIES_NAME_DELIMITER}${i}`,
-      );
+  const rawActionNames = Array.isArray(names)
+    ? (names as string[]).map(String)
+    : Array.from({ length: actionDim }, (_, i) => `${i}`);
+  const actionNames = rawActionNames.map(
+    (name) => `${actionKey}${SERIES_NAME_DELIMITER}${name}`,
+  );
+  const spatialAxisGroups = findSpatialAxisGroups(actionKey, rawActionNames);
 
   // State feature for alignment computation
   const stateEntry = Object.entries(info.features).find(
@@ -1970,25 +2020,55 @@ export async function loadCrossEpisodeActionVariance(
               Math.round((i * (allEps.length - 1)) / (cappedMaxEpisodes - 1))
             ],
         );
+  const sampledEpisodeIds = new Set(sampled.map((episode) => episode.index));
+  const sampledOrder = new Map(
+    sampled.map((episode, index) => [episode.index, index]),
+  );
+  const spatialSampleSize = spatialPointsPerEpisode(
+    allEps.length,
+    spatialAxisGroups.length,
+    MAX_SPATIAL_TRAJECTORY_POINTS,
+    MAX_SPATIAL_TRAJECTORY_POINTS_PER_EPISODE,
+  );
+  const spatialByLayer = new Map<string, SpatialTrajectory[]>(
+    spatialAxisGroups.map((group) => [group.id, []]),
+  );
+
+  const collectSpatialTrajectories = (
+    episodeIndex: number,
+    actions: number[][],
+  ) => {
+    if (spatialSampleSize === 0) return;
+    for (const axes of spatialAxisGroups) {
+      const points = extractSpatialTrajectory(actions, axes, spatialSampleSize);
+      if (points.length < 6) continue;
+      spatialByLayer.get(axes.id)?.push({ episodeIndex, points });
+    }
+  };
 
   // Load action (and state) data per episode
-  const episodeActions: { index: number; actions: number[][] }[] = [];
-  const episodeStates: (number[][] | null)[] = [];
+  const loadedEpisodes: {
+    index: number;
+    actions: number[][];
+    states: number[][] | null;
+  }[] = [];
 
   if (version === "v3.0") {
     const byFile = new Map<string, EpMeta[]>();
-    for (const ep of sampled) {
+    const episodesToLoad = spatialAxisGroups.length > 0 ? allEps : sampled;
+    for (const ep of episodesToLoad) {
       const key = `${ep.chunkIdx}-${ep.fileIdx}`;
       if (!byFile.has(key)) byFile.set(key, []);
       byFile.get(key)!.push(ep);
     }
 
-    const fileResults = await Promise.all(
-      [...byFile.values()].map(async (eps) => {
+    const fileResults = await mapWithConcurrency(
+      [...byFile.values()],
+      CROSS_EPISODE_FILE_CONCURRENCY,
+      async (eps) => {
         const ep0 = eps[0];
         const dataPath = `data/chunk-${ep0.chunkIdx.toString().padStart(3, "0")}/file-${ep0.fileIdx.toString().padStart(3, "0")}.parquet`;
-        const fileEpActions: { index: number; actions: number[][] }[] = [];
-        const fileEpStates: (number[][] | null)[] = [];
+        const fileEpisodes: typeof loadedEpisodes = [];
         try {
           const buf = await fetchParquetFile(
             buildVersionedUrl(repoId, version, dataPath),
@@ -2003,6 +2083,7 @@ export async function loadCrossEpisodeActionVariance(
               : 0;
 
           for (const ep of eps) {
+            const collectForStatistics = sampledEpisodeIds.has(ep.index);
             const localFrom = Math.max(0, ep.from - fileStart);
             const localTo = Math.min(rows.length, ep.to - fileStart);
             const actions: number[][] = [];
@@ -2010,39 +2091,45 @@ export async function loadCrossEpisodeActionVariance(
             for (let r = localFrom; r < localTo; r++) {
               const raw = rows[r]?.[actionKey];
               if (Array.isArray(raw)) actions.push(raw.map(Number));
-              if (stateKey) {
+              if (stateKey && collectForStatistics) {
                 const sRaw = rows[r]?.[stateKey];
                 if (Array.isArray(sRaw)) states.push(sRaw.map(Number));
               }
             }
-            if (actions.length > 0) {
-              const sampledIndices = evenlySampleIndices(
-                actions.length,
-                Math.min(actions.length, MAX_CROSS_EPISODE_FRAMES_PER_EPISODE),
-              );
-              const sampledActions = sampledIndices.map((i) => actions[i]);
-              const sampledStates =
+            if (actions.length === 0) continue;
+
+            collectSpatialTrajectories(ep.index, actions);
+            if (!collectForStatistics) continue;
+
+            const sampledIndices = evenlySampleIndices(
+              actions.length,
+              Math.min(actions.length, MAX_CROSS_EPISODE_FRAMES_PER_EPISODE),
+            );
+            fileEpisodes.push({
+              index: ep.index,
+              actions: sampledIndices.map((index) => actions[index]),
+              states:
                 stateKey && states.length === actions.length
-                  ? sampledIndices.map((i) => states[i])
-                  : null;
-              fileEpActions.push({ index: ep.index, actions: sampledActions });
-              fileEpStates.push(stateKey ? sampledStates : null);
-            }
+                  ? sampledIndices.map((index) => states[index])
+                  : null,
+            });
           }
         } catch {
           /* skip file */
         }
-        return { fileEpActions, fileEpStates };
-      }),
+        return fileEpisodes;
+      },
     );
-    for (const { fileEpActions, fileEpStates } of fileResults) {
-      episodeActions.push(...fileEpActions);
-      episodeStates.push(...fileEpStates);
-    }
+    for (const fileEpisodes of fileResults)
+      loadedEpisodes.push(...fileEpisodes);
   } else {
     const chunkSize = info.chunks_size || 1000;
-    const epResults = await Promise.all(
-      sampled.map(async (ep) => {
+    const episodesToLoad = spatialAxisGroups.length > 0 ? allEps : sampled;
+    const epResults = await mapWithConcurrency(
+      episodesToLoad,
+      CROSS_EPISODE_FILE_CONCURRENCY,
+      async (ep) => {
+        const collectForStatistics = sampledEpisodeIds.has(ep.index);
         const chunk = Math.floor(ep.index / chunkSize);
         const dataPath = formatStringWithVars(info.data_path, {
           episode_chunk: chunk.toString().padStart(3, "0"),
@@ -2070,40 +2157,49 @@ export async function loadCrossEpisodeActionVariance(
               }
               actions.push(vec);
             }
-            if (stateKey) {
+            if (stateKey && collectForStatistics) {
               const sRaw = row[stateKey];
               if (Array.isArray(sRaw)) states.push(sRaw.map(Number));
             }
           }
-          if (actions.length > 0) {
-            const sampledIndices = evenlySampleIndices(
-              actions.length,
-              Math.min(actions.length, MAX_CROSS_EPISODE_FRAMES_PER_EPISODE),
-            );
-            const sampledActions = sampledIndices.map((i) => actions[i]);
-            const sampledStates =
+          if (actions.length === 0) return null;
+
+          collectSpatialTrajectories(ep.index, actions);
+          if (!collectForStatistics) return null;
+
+          const sampledIndices = evenlySampleIndices(
+            actions.length,
+            Math.min(actions.length, MAX_CROSS_EPISODE_FRAMES_PER_EPISODE),
+          );
+          return {
+            index: ep.index,
+            actions: sampledIndices.map((index) => actions[index]),
+            states:
               stateKey && states.length === actions.length
-                ? sampledIndices.map((i) => states[i])
-                : null;
-            return {
-              index: ep.index,
-              actions: sampledActions,
-              states: sampledStates,
-            };
-          }
+                ? sampledIndices.map((index) => states[index])
+                : null,
+          };
         } catch {
           /* skip */
         }
         return null;
-      }),
+      },
     );
     for (const result of epResults) {
-      if (result !== null) {
-        episodeActions.push({ index: result.index, actions: result.actions });
-        episodeStates.push(stateKey ? result.states : null);
-      }
+      if (result !== null) loadedEpisodes.push(result);
     }
   }
+
+  loadedEpisodes.sort(
+    (a, b) =>
+      (sampledOrder.get(a.index) ?? Number.MAX_SAFE_INTEGER) -
+      (sampledOrder.get(b.index) ?? Number.MAX_SAFE_INTEGER),
+  );
+  const episodeActions = loadedEpisodes.map(({ index, actions }) => ({
+    index,
+    actions,
+  }));
+  const episodeStates = loadedEpisodes.map(({ states }) => states);
 
   if (episodeActions.length < 2) {
     console.warn(
@@ -2545,17 +2641,46 @@ export async function loadCrossEpisodeActionVariance(
     };
   })();
 
+  const spatialTrajectories: SpatialTrajectoryData | null = (() => {
+    if (spatialAxisGroups.length === 0) return null;
+    let totalPoints = 0;
+    const layers = spatialAxisGroups
+      .map((axes) => {
+        const trajectories = spatialByLayer.get(axes.id) ?? [];
+        trajectories.sort((a, b) => a.episodeIndex - b.episodeIndex);
+        for (const trajectory of trajectories)
+          totalPoints += trajectory.points.length / 3;
+        return {
+          id: axes.id,
+          label: axes.label,
+          axisNames: axes.axisNames,
+          trajectories,
+        };
+      })
+      .filter((layer) => layer.trajectories.length > 0);
+
+    if (layers.length === 0) return null;
+    return {
+      totalEpisodes: info.total_episodes,
+      pointsPerEpisode: spatialSampleSize,
+      totalPoints,
+      layers,
+    };
+  })();
+
   return {
     actionNames,
     timeBins,
     variance,
     numEpisodes: episodeActions.length,
+    totalEpisodes: info.total_episodes,
     lowMovementEpisodes,
     aggVelocity,
     aggAutocorrelation,
     speedDistribution,
     jerkyEpisodes,
     aggAlignment,
+    spatialTrajectories,
   };
 }
 

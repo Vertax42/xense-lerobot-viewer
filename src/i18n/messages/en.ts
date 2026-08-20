@@ -410,6 +410,33 @@ export const en = {
   "insights.scopeEpisodeToggle": "Current Episode",
   "insights.scopeAllToggle": "All Episodes",
   "insights.scopeToggleAria": "Toggle episode/dataset scope",
+  "insights.scopeSamplingNote":
+    "{sampled} / {total} episodes sampled for statistical analyses",
+  "insights.trajTitle": "3D Action Trajectory Distribution",
+  "insights.trajDesc":
+    "Shows the Cartesian action trajectories from every episode. Each trajectory is evenly downsampled only for rendering; no episode is intentionally omitted.",
+  "insights.trajLoading": "Loading all-episode 3D trajectories…",
+  "insights.trajNoData":
+    "No complete named action xyz groups were found (for example left_tcp.x/y/z).",
+  "insights.trajCoverage": "{loaded} / {total} episodes shown",
+  "insights.trajPointCount": "{count} rendered points",
+  "insights.trajSelectLayer": "Select at least one trajectory layer.",
+  "insights.trajEpisodeLegend": "Episodes",
+  "insights.trajEpisodeLegendHint":
+    "Each Episode has its own line color. Hover to identify; click to isolate.",
+  "insights.trajShowAll": "Show all",
+  "insights.trajEpisodeSelectAria": "Focus an Episode",
+  "insights.trajAllEpisodesOption": "All Episodes ({count})",
+  "insights.trajEpisodeLabel": "Episode {episode}",
+  "insights.trajEpisodeButtonTitle":
+    "Focus the trajectory for Episode {episode}",
+  "insights.trajHoverPrompt":
+    "Hover a trajectory to identify it; focused lines are brighter.",
+  "insights.trajHoveredStatus": "Episode {episode} · action · {layer}",
+  "insights.trajFocusedStatus": "Focused: Episode {episode}",
+  "insights.trajControls":
+    "Drag to rotate · Scroll to zoom · Right-drag to pan",
+  "insights.trajCoordinate": "Z up · position unit: m",
   "insights.lagAxis": "Lag (steps)",
   "insights.lagTooltip": "Lag {lag} ({seconds}s)",
   "insights.overall": "Overall:",

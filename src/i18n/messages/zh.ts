@@ -404,6 +404,32 @@ export const zh: Record<MessageKey, string> = {
   "insights.scopeEpisodeToggle": "当前 Episode",
   "insights.scopeAllToggle": "全部 Episode",
   "insights.scopeToggleAria": "切换 episode / 数据集范围",
+  "insights.scopeSamplingNote":
+    "统计分析从 {total} episodes 中采样 {sampled} episodes",
+  "insights.trajTitle": "三维 Action 轨迹分布",
+  "insights.trajDesc":
+    "展示每个 episode 的笛卡尔空间 action 轨迹。每条轨迹只为渲染进行均匀降采样，不会主动省略任何 episode。",
+  "insights.trajLoading": "正在加载全部 episodes 的三维轨迹…",
+  "insights.trajNoData":
+    "没有找到命名完整的 action xyz 维度组（例如 left_tcp.x/y/z）。",
+  "insights.trajCoverage": "已显示 {loaded} / {total} episodes",
+  "insights.trajPointCount": "渲染 {count} points",
+  "insights.trajSelectLayer": "请至少选择一个轨迹图层。",
+  "insights.trajEpisodeLegend": "Episode 轨迹",
+  "insights.trajEpisodeLegendHint":
+    "每个 Episode 使用独立的轨迹颜色；悬停查看编号，点击聚焦。",
+  "insights.trajShowAll": "显示全部",
+  "insights.trajEpisodeSelectAria": "选择要聚焦的 Episode",
+  "insights.trajAllEpisodesOption": "全部 Episodes（{count}）",
+  "insights.trajEpisodeLabel": "Episode 编号：{episode}",
+  "insights.trajEpisodeButtonTitle": "聚焦 Episode {episode} 的轨迹",
+  "insights.trajHoverPrompt":
+    "悬停轨迹可查看编号；聚焦的轨迹会以更亮的颜色显示。",
+  "insights.trajHoveredStatus":
+    "对应轨迹：Episode {episode} · action · {layer}",
+  "insights.trajFocusedStatus": "当前聚焦：Episode {episode}",
+  "insights.trajControls": "拖动旋转 · 滚轮缩放 · 右键拖动平移",
+  "insights.trajCoordinate": "Z 轴向上 · 位置单位：m",
   "insights.lagAxis": "滞后（steps）",
   "insights.lagTooltip": "滞后 {lag}（{seconds}s）",
   "insights.overall": "总体：",

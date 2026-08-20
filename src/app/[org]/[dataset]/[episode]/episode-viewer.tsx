@@ -863,6 +863,7 @@ function EpisodeViewerInner({
               <ActionInsightsPanel
                 flatChartData={data.flatChartData}
                 fps={datasetInfo.fps}
+                totalEpisodes={datasetInfo.total_episodes}
                 crossEpisodeData={crossEpData}
                 crossEpisodeLoading={insightsLoading}
               />
