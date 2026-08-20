@@ -285,6 +285,45 @@ function toFiniteNumber(value: unknown): number | null {
   return null;
 }
 
+/**
+ * Convert parquet timestamps into episode-local playback timestamps.
+ *
+ * LeRobot v3 data already carries the authoritative time of every sample.
+ * Prefer it over redistributing rows across the video segment: the latter can
+ * shift a real frame by a fraction of a frame whenever video duration and the
+ * last sample timestamp use different end-point conventions. If timestamps
+ * are absent, frozen, or non-monotonic, fall back to the declared dataset FPS.
+ */
+export function buildEpisodeChartTimestamps(
+  rows: Record<string, unknown>[],
+  fps: number,
+): number[] {
+  if (rows.length === 0) return [];
+
+  const source = rows.map((row) => toFiniteNumber(row.timestamp));
+  const origin = source[0];
+  let sourceIsUsable = origin !== null;
+
+  for (let index = 1; sourceIsUsable && index < source.length; index++) {
+    const previous = source[index - 1];
+    const current = source[index];
+    if (previous === null || current === null || current < previous) {
+      sourceIsUsable = false;
+    }
+  }
+
+  if (
+    sourceIsUsable &&
+    origin !== null &&
+    (rows.length === 1 || source[source.length - 1]! > origin)
+  ) {
+    return source.map((timestamp) => Math.max(0, timestamp! - origin));
+  }
+
+  const frameRate = Number.isFinite(fps) && fps > 0 ? fps : 30;
+  return rows.map((_, index) => index / frameRate);
+}
+
 function buildProgressSeriesKey(progressColumn: string): string {
   if (progressColumn === "progress_sparse") {
     return `progress${SERIES_NAME_DELIMITER}sparse`;
@@ -970,7 +1009,7 @@ async function loadEpisodeDataV3(
       velocityChartDataGroups,
       flatChartData,
       ignoredColumns,
-    } = processEpisodeDataForCharts(episodeRows, info, episodeMetadata);
+    } = processEpisodeDataForCharts(episodeRows, info);
 
     // Prefer the authoritative `tasks` list on the episode's own metadata
     // (v3.0 stores it as list[str] — see lerobot dataset_metadata.save_episode).
@@ -1152,7 +1191,6 @@ function extractLanguageAtoms(
 function processEpisodeDataForCharts(
   episodeData: Record<string, unknown>[],
   info: DatasetMetadata,
-  episodeMetadata?: EpisodeMetadataV3,
 ): {
   chartDataGroups: ChartRow[][];
   velocityChartDataGroups: ChartRow[][];
@@ -1259,20 +1297,14 @@ function processEpisodeDataForCharts(
     seriesNames = ["timestamp", ...columns.map(({ value }) => value).flat()];
   }
 
+  const chartTimestamps = buildEpisodeChartTimestamps(episodeData, info.fps);
   const chartData = episodeData.map((row, index) => {
     const obj: Record<string, number> = {};
 
-    // Add timestamp aligned with video timing
-    // For v3.0, we need to map the episode data index to the actual video duration
-    let videoDuration = episodeData.length; // Fallback to data length
-    if (episodeMetadata) {
-      // Use actual video segment duration if available
-      videoDuration =
-        (episodeMetadata.video_to_timestamp || 30) -
-        (episodeMetadata.video_from_timestamp || 0);
-    }
-    obj["timestamp"] =
-      (index / Math.max(episodeData.length - 1, 1)) * videoDuration;
+    // Preserve the parquet sample time. Re-scaling row indices to the video
+    // duration subtly moves frames and can make the 3D playback marker appear
+    // to have no matching observation at an otherwise valid timestamp.
+    obj["timestamp"] = chartTimestamps[index];
 
     // Add all data columns using hierarchical naming
     if (row && typeof row === "object") {
@@ -1316,11 +1348,8 @@ function processEpisodeDataForCharts(
     return obj;
   });
 
-  const sourceTimestamps = episodeData.map(
-    (row) => toFiniteNumber(row.timestamp) ?? Number.NaN,
-  );
   const velocityChartDataGroups = buildPoseVelocityChartGroups(chartData, {
-    sourceTimestamps,
+    sourceTimestamps: chartTimestamps,
     fps: info.fps,
   }).map((group) => evenlySampleArray(group, MAX_EPISODE_POINTS));
   const sampledChartData = evenlySampleArray(chartData, MAX_EPISODE_POINTS);

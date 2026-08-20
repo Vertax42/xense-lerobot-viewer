@@ -796,6 +796,8 @@ function EpisodeViewerInner({
                   <DataRecharts
                     data={chartDataGroups}
                     velocityData={velocityChartDataGroups}
+                    flatData={data.flatChartData}
+                    fps={datasetInfo.fps}
                     onChartsReady={() => setChartsReady(true)}
                   />
                 </Suspense>
