@@ -20,6 +20,7 @@ import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import UrdfPlaybackBar from "@/components/urdf-playback-bar";
+import UrdfVideoOverlay from "@/components/urdf-video-overlay";
 import { useT } from "@/context/locale-context";
 import { isTacCapRobot } from "@/lib/so101-robot";
 import { CHART_CONFIG } from "@/utils/constants";
@@ -1358,16 +1359,16 @@ export default function URDFViewer({
     [],
   );
 
-  const tacCapTimeSeconds =
+  const replayTimeSeconds =
     chartData[Math.min(frame, Math.max(totalFrames - 1, 0))]?.timestamp ??
     frame / fps;
   const tacCapFrames = useMemo(
     () =>
       tacCapTracks.flatMap((track) => {
-        const sampled = sampleTacCapGripperFrame(track, tacCapTimeSeconds);
+        const sampled = sampleTacCapGripperFrame(track, replayTimeSeconds);
         return sampled ? [sampled] : [];
       }),
-    [tacCapTimeSeconds, tacCapTracks],
+    [replayTimeSeconds, tacCapTracks],
   );
   const tacCapDataUnavailable = isTacCap && tacCapTracks.length === 0;
   const trajectoryUnavailable = totalFrames === 0 || tacCapDataUnavailable;
@@ -1473,14 +1474,14 @@ export default function URDFViewer({
       {/* 3D Viewport */}
       <div className="flex-1 min-h-0 bg-[var(--surface-0)] rounded-lg overflow-hidden border border-white/10 relative">
         {isTacCap && !tacCapDataUnavailable && (
-          <div className="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-2 rounded border border-white/10 bg-slate-950/75 px-2 py-1 font-mono text-[10px] shadow backdrop-blur-sm">
+          <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded border border-white/10 bg-slate-950/75 px-2 py-1 font-mono text-[10px] shadow backdrop-blur-sm">
             <span className="text-red-400">X · {t("urdf.axisForward")}</span>
             <span className="text-green-400">Y · {t("urdf.axisLeft")}</span>
             <span className="text-blue-400">Z · {t("urdf.axisUp")}</span>
           </div>
         )}
         {urdfLoading && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--bg)]/80">
+          <div className="absolute inset-0 z-30 flex items-center justify-center bg-[var(--bg)]/80">
             <span className="text-white text-lg animate-pulse">
               {t("urdf.loadingModel")}
             </span>
@@ -1538,7 +1539,7 @@ export default function URDFViewer({
             <TacCapGripperScene
               frames={tacCapFrames}
               onReadyChange={setTacCapModelsReady}
-              timeSeconds={tacCapTimeSeconds}
+              timeSeconds={replayTimeSeconds}
               tracks={tacCapTracks}
               trailEnabled={trailEnabled}
             />
@@ -1586,6 +1587,12 @@ export default function URDFViewer({
             setFrame={setFrame}
           />
         </Canvas>
+        <UrdfVideoOverlay
+          active={active}
+          episodeTimeSeconds={replayTimeSeconds}
+          playing={playing}
+          videos={data.videosInfo}
+        />
         {trajectoryUnavailable && (
           <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg)]/75 px-6 text-center text-sm text-amber-300">
             {t(
