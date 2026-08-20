@@ -19,7 +19,6 @@ import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
-import { loadEpisodeFlatChartData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import UrdfPlaybackBar from "@/components/urdf-playback-bar";
 import { useT } from "@/context/locale-context";
 import { isTacCapRobot } from "@/lib/so101-robot";
@@ -38,8 +37,6 @@ import {
   tacCapRecordedTcpSceneMatrix,
   tacCapRecordedTcpToRootMatrix,
 } from "@/utils/taccapGripperTransforms";
-import { getDatasetVersionAndInfo } from "@/utils/versionUtils";
-import type { DatasetMetadata } from "@/utils/parquetUtils";
 
 const SERIES_DELIM = CHART_CONFIG.SERIES_NAME_DELIMITER;
 const DEG2RAD = Math.PI / 180;
@@ -486,15 +483,15 @@ function TacCapGripperModel({
   side,
   onReady,
 }: {
-  frame: TacCapGripperFrame;
+  frame: TacCapGripperFrame | null;
   side: TacCapSide;
   onReady: (side: TacCapSide) => void;
 }) {
   const { scene } = useThree();
   const robotRef = useRef<URDFRobot | null>(null);
   const recordedTcpToRootRef = useRef<THREE.Matrix4 | null>(null);
-  const frameRef = useRef(frame);
-  frameRef.current = frame;
+  const frameRef = useRef<TacCapGripperFrame | null>(frame);
+  if (frame) frameRef.current = frame;
 
   useEffect(() => {
     let cancelled = false;
@@ -554,11 +551,15 @@ function TacCapGripperModel({
           child.receiveShadow = true;
         });
         scene.add(robot);
-        applyTacCapGripperFrame(
-          robot,
-          recordedTcpToRootRef.current,
-          frameRef.current,
-        );
+        if (frameRef.current) {
+          applyTacCapGripperFrame(
+            robot,
+            recordedTcpToRootRef.current,
+            frameRef.current,
+          );
+        } else {
+          robot.visible = false;
+        }
         robotLoaded = true;
         reportReady();
       },
@@ -583,6 +584,9 @@ function TacCapGripperModel({
     const robot = robotRef.current;
     const recordedTcpToRoot = recordedTcpToRootRef.current;
     if (!robot || !recordedTcpToRoot) return;
+
+    robot.visible = frame !== null;
+    if (!frame) return;
 
     applyTacCapGripperFrame(robot, recordedTcpToRoot, frame);
   }, [frame]);
@@ -688,29 +692,28 @@ function TacCapGripperScene({
       return next;
     });
   }, []);
+  const modelSides = useMemo(
+    () => ["left", "right"] as const satisfies readonly TacCapSide[],
+    [],
+  );
 
   useEffect(() => {
-    onReadyChange(
-      tracks.length > 0 && tracks.every((track) => readySides.has(track.side)),
-    );
-  }, [onReadyChange, readySides, tracks]);
+    onReadyChange(modelSides.every((side) => readySides.has(side)));
+  }, [modelSides, onReadyChange, readySides]);
 
   const gridSize = bounds.extent * 1.5;
   const gridY = bounds.min.y - bounds.extent * 0.04;
 
   return (
     <>
-      {tracks.map((track) => {
-        const frame = frameBySide.get(track.side);
-        return frame ? (
-          <TacCapGripperModel
-            key={track.side}
-            frame={frame}
-            side={track.side}
-            onReady={handleReady}
-          />
-        ) : null;
-      })}
+      {modelSides.map((side) => (
+        <TacCapGripperModel
+          key={side}
+          frame={frameBySide.get(side) ?? null}
+          side={side}
+          onReady={handleReady}
+        />
+      ))}
       {tracks.map((track) => (
         <TacCapTrackTrail
           key={`trail:${track.side}`}
@@ -1254,13 +1257,11 @@ function PlaybackDriver({
 // ═══════════════════════════════════════
 export default function URDFViewer({
   data,
-  repoId,
-  episodeChangerRef,
+  active,
   playToggleRef,
 }: {
   data: EpisodeData;
-  repoId?: string | null;
-  episodeChangerRef?: React.RefObject<((ep: number) => void) | undefined>;
+  active: boolean;
   playToggleRef?: React.RefObject<(() => void) | undefined>;
 }) {
   const t = useT();
@@ -1274,66 +1275,8 @@ export default function URDFViewer({
   const { urdfUrl, scale } = robotConfig;
   const isG1 = urdfUrl.includes("g1");
   const isOpenArm = urdfUrl.includes("openarm");
-  const datasetInfoRef = useRef<{
-    version: string;
-    info: DatasetMetadata;
-  } | null>(null);
-
-  const ensureDatasetInfo = useCallback(async () => {
-    if (!repoId) return null;
-    if (datasetInfoRef.current) return datasetInfoRef.current;
-    const { version, info } = await getDatasetVersionAndInfo(repoId);
-    const payload = { version, info: info as unknown as DatasetMetadata };
-    datasetInfoRef.current = payload;
-    return payload;
-  }, [repoId]);
-
-  // Episode selection & chart data
-  const [selectedEpisode, setSelectedEpisode] = useState(data.episodeId);
-  const [chartData, setChartData] = useState(data.flatChartData);
-  const [episodeLoading, setEpisodeLoading] = useState(false);
-  const chartDataCache = useRef<Record<number, Record<string, number>[]>>({
-    [data.episodeId]: data.flatChartData,
-  });
-
-  const handleEpisodeChange = useCallback(
-    (epId: number) => {
-      setSelectedEpisode(epId);
-      setFrame(0);
-      frameRef.current = 0;
-      setPlaying(false);
-
-      if (chartDataCache.current[epId]) {
-        setChartData(chartDataCache.current[epId]);
-        return;
-      }
-
-      if (!repoId) return;
-      setEpisodeLoading(true);
-      ensureDatasetInfo()
-        .then((payload) => {
-          if (!payload) return null;
-          return loadEpisodeFlatChartData(
-            repoId,
-            payload.version,
-            payload.info,
-            epId,
-          );
-        })
-        .then((result) => {
-          if (!result) return;
-          chartDataCache.current[epId] = result;
-          setChartData(result);
-        })
-        .catch((err) => console.error("Failed to load episode:", err))
-        .finally(() => setEpisodeLoading(false));
-    },
-    [ensureDatasetInfo, repoId],
-  );
-
-  useEffect(() => {
-    if (episodeChangerRef) episodeChangerRef.current = handleEpisodeChange;
-  }, [episodeChangerRef, handleEpisodeChange]);
+  const selectedEpisode = data.episodeId;
+  const chartData = data.flatChartData;
 
   const totalFrames = chartData.length;
 
@@ -1397,8 +1340,14 @@ export default function URDFViewer({
   const frameRef = useRef(0);
 
   useEffect(() => {
-    if (isTacCap) setTacCapModelsReady(false);
-  }, [chartData, isTacCap]);
+    setFrame(0);
+    frameRef.current = 0;
+    setPlaying(false);
+  }, [selectedEpisode]);
+
+  useEffect(() => {
+    if (!active) setPlaying(false);
+  }, [active]);
 
   const handleFrameChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1421,6 +1370,7 @@ export default function URDFViewer({
     [tacCapTimeSeconds, tacCapTracks],
   );
   const tacCapDataUnavailable = isTacCap && tacCapTracks.length === 0;
+  const trajectoryUnavailable = totalFrames === 0 || tacCapDataUnavailable;
 
   // URDF meshes load asynchronously. Generic robots report their joints when
   // ready; the TacCap scene reports once every required left/right model and
@@ -1428,8 +1378,7 @@ export default function URDFViewer({
   const urdfLoading = isTacCap
     ? !tacCapDataUnavailable && !tacCapModelsReady
     : urdfJointNames.length === 0;
-  const playbackDisabled =
-    episodeLoading || urdfLoading || tacCapDataUnavailable;
+  const playbackDisabled = !active || urdfLoading || trajectoryUnavailable;
 
   useEffect(() => {
     if (playbackDisabled) setPlaying(false);
@@ -1519,14 +1468,6 @@ export default function URDFViewer({
     return values;
   }, [chartData, frame, gripperRanges, mapping, totalFrames, urdfJointNames]);
 
-  if (data.flatChartData.length === 0) {
-    return (
-      <div className="text-slate-400 p-8 text-center">
-        {t("urdf.noTrajectory")}
-      </div>
-    );
-  }
-
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* 3D Viewport */}
@@ -1538,17 +1479,16 @@ export default function URDFViewer({
             <span className="text-blue-400">Z · {t("urdf.axisUp")}</span>
           </div>
         )}
-        {(episodeLoading || urdfLoading) && (
+        {urdfLoading && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--bg)]/80">
             <span className="text-white text-lg animate-pulse">
-              {urdfLoading
-                ? t("urdf.loadingModel")
-                : t("urdf.loadingEpisode", { index: selectedEpisode })}
+              {t("urdf.loadingModel")}
             </span>
           </div>
         )}
         <Canvas
           shadows
+          frameloop={active ? "always" : "never"}
           camera={{
             position: isG1
               ? [1.5, 1.0, 1.5]
@@ -1595,15 +1535,13 @@ export default function URDFViewer({
             intensity={0.4}
           />
           {isTacCap ? (
-            !tacCapDataUnavailable && (
-              <TacCapGripperScene
-                frames={tacCapFrames}
-                onReadyChange={setTacCapModelsReady}
-                timeSeconds={tacCapTimeSeconds}
-                tracks={tacCapTracks}
-                trailEnabled={trailEnabled}
-              />
-            )
+            <TacCapGripperScene
+              frames={tacCapFrames}
+              onReadyChange={setTacCapModelsReady}
+              timeSeconds={tacCapTimeSeconds}
+              tracks={tacCapTracks}
+              trailEnabled={trailEnabled}
+            />
           ) : (
             <>
               {/* Ground-shadow catcher — invisible plane receives key-light shadow */}
@@ -1648,9 +1586,13 @@ export default function URDFViewer({
             setFrame={setFrame}
           />
         </Canvas>
-        {tacCapDataUnavailable && (
+        {trajectoryUnavailable && (
           <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg)]/75 px-6 text-center text-sm text-amber-300">
-            {t("urdf.tacCapNoPose")}
+            {t(
+              isTacCap && tacCapDataUnavailable
+                ? "urdf.tacCapNoPose"
+                : "urdf.noTrajectory",
+            )}
           </div>
         )}
       </div>
