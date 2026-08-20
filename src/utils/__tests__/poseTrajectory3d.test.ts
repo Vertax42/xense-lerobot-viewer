@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   extractEpisodePoseTrajectories,
   hasEpisodePoseTrajectories,
+  locateEpisodePoseTrajectory,
   rotation6dToMatrix,
   sampleEpisodePoseRotation,
   sampleEpisodePoseTrajectory,
@@ -114,6 +115,20 @@ describe("episode 3D pose trajectories", () => {
     expect(sampleEpisodePoseTrajectory(trajectory, 0.5)).toEqual({
       point: [5, 10, 15],
       trailPoints: [0, 0, 0, 5, 10, 15],
+    });
+    expect(locateEpisodePoseTrajectory(trajectory, 0.5)).toEqual({
+      point: [5, 10, 15],
+      lowerIndex: 0,
+      upperIndex: 1,
+      alpha: 0.5,
+      completedPointCount: 1,
+    });
+    expect(locateEpisodePoseTrajectory(trajectory, 1)).toEqual({
+      point: [10, 20, 30],
+      lowerIndex: 1,
+      upperIndex: 1,
+      alpha: 0,
+      completedPointCount: 2,
     });
     expect(sampleEpisodePoseTrajectory(trajectory, 3)).toEqual({
       point: [20, 40, 60],

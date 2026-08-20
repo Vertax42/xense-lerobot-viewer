@@ -57,6 +57,19 @@ export type EpisodePoseTrajectoryPlayback = {
   trailPoints: number[];
 };
 
+export type EpisodePoseTrajectoryLocation = {
+  /** Interpolated xyz position at the requested episode time. */
+  point: [number, number, number];
+  /** Sample immediately before the requested time (or the exact sample). */
+  lowerIndex: number;
+  /** Sample immediately after the requested time (or the exact sample). */
+  upperIndex: number;
+  /** Interpolation factor between lowerIndex and upperIndex. */
+  alpha: number;
+  /** Number of complete source samples that belong to the played trail. */
+  completedPointCount: number;
+};
+
 function finiteNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   const number = typeof value === "number" ? value : Number(value);
@@ -275,34 +288,29 @@ export function sampleEpisodePoseRotation(
   const rotations = trajectory.rotationValues;
   if (!rotations) return null;
 
-  const validIndices = rotations.flatMap((rotation, index) =>
-    rotation ? [index] : [],
-  );
-  if (validIndices.length === 0) return null;
+  const location = locateEpisodePoseTrajectory(trajectory, timeSeconds);
+  if (!location) return null;
 
-  const requestedTime = Number.isFinite(timeSeconds) ? timeSeconds : 0;
-  const firstIndex = validIndices[0];
-  const lastIndex = validIndices[validIndices.length - 1];
-  if (requestedTime <= trajectory.timestamps[firstIndex]) {
-    return rotation6dToMatrix(rotations[firstIndex]!);
-  }
-  if (requestedTime >= trajectory.timestamps[lastIndex]) {
-    return rotation6dToMatrix(rotations[lastIndex]!);
+  let lowerIndex = Math.min(location.lowerIndex, rotations.length - 1);
+  while (lowerIndex >= 0 && !rotations[lowerIndex]) lowerIndex -= 1;
+
+  let upperIndex = Math.min(location.upperIndex, rotations.length - 1);
+  while (upperIndex < rotations.length && !rotations[upperIndex]) {
+    upperIndex += 1;
   }
 
-  let lowerIndex = firstIndex;
-  let upperIndex = lastIndex;
-  for (const index of validIndices) {
-    if (trajectory.timestamps[index] <= requestedTime) lowerIndex = index;
-    if (trajectory.timestamps[index] >= requestedTime) {
-      upperIndex = index;
-      break;
-    }
+  if (lowerIndex < 0 && upperIndex >= rotations.length) return null;
+  if (lowerIndex < 0) return rotation6dToMatrix(rotations[upperIndex]!);
+  if (upperIndex >= rotations.length) {
+    return rotation6dToMatrix(rotations[lowerIndex]!);
   }
 
   const lower = rotations[lowerIndex]!;
   const upper = rotations[upperIndex]!;
   if (lowerIndex === upperIndex) return rotation6dToMatrix(lower);
+  const requestedTime = Number.isFinite(timeSeconds)
+    ? timeSeconds
+    : trajectory.timestamps[lowerIndex];
   const lowerTime = trajectory.timestamps[lowerIndex];
   const upperTime = trajectory.timestamps[upperIndex];
   const alpha =
@@ -316,6 +324,104 @@ export function sampleEpisodePoseRotation(
 }
 
 /**
+ * Locate a playback position without allocating a growing copy of the trail.
+ * Timestamps produced by the episode loader are monotonic, so binary search
+ * keeps the per-frame lookup logarithmic even for long episodes.
+ */
+export function locateEpisodePoseTrajectory(
+  trajectory: EpisodePoseTrajectory,
+  timeSeconds: number,
+): EpisodePoseTrajectoryLocation | null {
+  const pointCount = Math.min(
+    Math.floor(trajectory.points.length / 3),
+    trajectory.timestamps.length,
+  );
+  if (pointCount === 0) return null;
+
+  const pointAt = (index: number): [number, number, number] => {
+    const offset = index * 3;
+    return [
+      trajectory.points[offset],
+      trajectory.points[offset + 1],
+      trajectory.points[offset + 2],
+    ];
+  };
+  const firstTime = trajectory.timestamps[0];
+  const requestedTime = Number.isFinite(timeSeconds) ? timeSeconds : firstTime;
+
+  if (pointCount === 1 || requestedTime <= firstTime) {
+    return {
+      point: pointAt(0),
+      lowerIndex: 0,
+      upperIndex: 0,
+      alpha: 0,
+      completedPointCount: 1,
+    };
+  }
+
+  const lastIndex = pointCount - 1;
+  if (requestedTime >= trajectory.timestamps[lastIndex]) {
+    return {
+      point: pointAt(lastIndex),
+      lowerIndex: lastIndex,
+      upperIndex: lastIndex,
+      alpha: 0,
+      completedPointCount: pointCount,
+    };
+  }
+
+  let low = 1;
+  let high = lastIndex;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (trajectory.timestamps[middle] < requestedTime) low = middle + 1;
+    else high = middle;
+  }
+
+  const upperIndex = low;
+  const upperTime = trajectory.timestamps[upperIndex];
+  if (upperTime === requestedTime) {
+    return {
+      point: pointAt(upperIndex),
+      lowerIndex: upperIndex,
+      upperIndex,
+      alpha: 0,
+      completedPointCount: upperIndex + 1,
+    };
+  }
+
+  const lowerIndex = upperIndex - 1;
+  const lowerTime = trajectory.timestamps[lowerIndex];
+  const denominator = upperTime - lowerTime;
+  const alpha =
+    denominator > 0
+      ? Math.max(0, Math.min(1, (requestedTime - lowerTime) / denominator))
+      : 1;
+  const lowerOffset = lowerIndex * 3;
+  const upperOffset = upperIndex * 3;
+
+  return {
+    point: [
+      trajectory.points[lowerOffset] +
+        (trajectory.points[upperOffset] - trajectory.points[lowerOffset]) *
+          alpha,
+      trajectory.points[lowerOffset + 1] +
+        (trajectory.points[upperOffset + 1] -
+          trajectory.points[lowerOffset + 1]) *
+          alpha,
+      trajectory.points[lowerOffset + 2] +
+        (trajectory.points[upperOffset + 2] -
+          trajectory.points[lowerOffset + 2]) *
+          alpha,
+    ],
+    lowerIndex,
+    upperIndex,
+    alpha,
+    completedPointCount: lowerIndex + 1,
+  };
+}
+
+/**
  * Interpolate a sampled trajectory at an episode-local playback time. The
  * chart rows are sampled for rendering, so interpolation keeps the playback
  * marker smooth without loading the original parquet rows again.
@@ -324,75 +430,15 @@ export function sampleEpisodePoseTrajectory(
   trajectory: EpisodePoseTrajectory,
   timeSeconds: number,
 ): EpisodePoseTrajectoryPlayback | null {
-  const pointCount = Math.min(
-    Math.floor(trajectory.points.length / 3),
-    trajectory.timestamps.length,
+  const location = locateEpisodePoseTrajectory(trajectory, timeSeconds);
+  if (!location) return null;
+
+  const trailPoints = trajectory.points.slice(
+    0,
+    location.completedPointCount * 3,
   );
-  if (pointCount === 0) return null;
-
-  const firstPoint: [number, number, number] = [
-    trajectory.points[0],
-    trajectory.points[1],
-    trajectory.points[2],
-  ];
-  const firstTime = trajectory.timestamps[0];
-  const requestedTime = Number.isFinite(timeSeconds) ? timeSeconds : firstTime;
-
-  if (pointCount === 1 || requestedTime <= firstTime) {
-    return {
-      point: firstPoint,
-      trailPoints: firstPoint.slice(),
-    };
+  if (location.lowerIndex !== location.upperIndex) {
+    trailPoints.push(...location.point);
   }
-
-  const lastIndex = pointCount - 1;
-  const lastTime = trajectory.timestamps[lastIndex];
-  if (requestedTime >= lastTime) {
-    return {
-      point: [
-        trajectory.points[lastIndex * 3],
-        trajectory.points[lastIndex * 3 + 1],
-        trajectory.points[lastIndex * 3 + 2],
-      ],
-      trailPoints: trajectory.points.slice(0, pointCount * 3),
-    };
-  }
-
-  // Find the first sampled point at or after the requested time. The chart
-  // sample is capped at a few thousand points, so a linear walk is both
-  // inexpensive and robust to duplicate/non-monotonic timestamps.
-  let upperIndex = 1;
-  while (
-    upperIndex < pointCount &&
-    trajectory.timestamps[upperIndex] < requestedTime
-  ) {
-    upperIndex += 1;
-  }
-
-  const lowerIndex = upperIndex - 1;
-  const lowerTime = trajectory.timestamps[lowerIndex];
-  const upperTime = trajectory.timestamps[upperIndex];
-  const lowerOffset = lowerIndex * 3;
-  const upperOffset = upperIndex * 3;
-  const denominator = upperTime - lowerTime;
-  const alpha =
-    denominator > 0
-      ? Math.max(0, Math.min(1, (requestedTime - lowerTime) / denominator))
-      : 1;
-  const point: [number, number, number] = [
-    trajectory.points[lowerOffset] +
-      (trajectory.points[upperOffset] - trajectory.points[lowerOffset]) * alpha,
-    trajectory.points[lowerOffset + 1] +
-      (trajectory.points[upperOffset + 1] -
-        trajectory.points[lowerOffset + 1]) *
-        alpha,
-    trajectory.points[lowerOffset + 2] +
-      (trajectory.points[upperOffset + 2] -
-        trajectory.points[lowerOffset + 2]) *
-        alpha,
-  ];
-
-  const trailPoints = trajectory.points.slice(0, (lowerIndex + 1) * 3);
-  trailPoints.push(...point);
-  return { point, trailPoints };
+  return { point: location.point, trailPoints };
 }

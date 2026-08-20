@@ -3,6 +3,7 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -14,9 +15,10 @@ import { useT } from "@/context/locale-context";
 import { useTime } from "@/context/time-context";
 import {
   extractEpisodePoseTrajectories,
+  locateEpisodePoseTrajectory,
   sampleEpisodePoseRotation,
-  sampleEpisodePoseTrajectory,
   type EpisodePoseTrajectory,
+  type EpisodePoseTrajectoryLocation,
   type RotationMatrix3,
 } from "@/utils/poseTrajectory3d";
 
@@ -161,48 +163,119 @@ function PoseOrientationFrame({
   rotation,
   size,
   highlighted,
-  onHover,
 }: {
   /** Origin in dataset coordinates, before the Z-up to Y-up conversion. */
   origin: [number, number, number];
   rotation: RotationMatrix3;
   size: number;
   highlighted: boolean;
-  onHover: () => void;
 }) {
-  const sceneOrigin = new THREE.Vector3(...toScenePoint(...origin));
-  const axes = [
-    { label: "X", color: "#f87171", direction: rotationColumn(rotation, 0) },
-    { label: "Y", color: "#4ade80", direction: rotationColumn(rotation, 1) },
-    { label: "Z", color: "#60a5fa", direction: rotationColumn(rotation, 2) },
-  ] as const;
+  const resources = useMemo(() => {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(new Float32Array(18), 3),
+    );
+    const colors = new Float32Array(18);
+    ["#f87171", "#4ade80", "#60a5fa"].forEach((color, axisIndex) => {
+      const parsed = new THREE.Color(color);
+      for (let vertex = 0; vertex < 2; vertex += 1) {
+        const offset = (axisIndex * 2 + vertex) * 3;
+        colors[offset] = parsed.r;
+        colors[offset + 1] = parsed.g;
+        colors[offset + 2] = parsed.b;
+      }
+    });
+    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    const material = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const segments = new THREE.LineSegments(geometry, material);
+    // Native Three.js line raycasts use a one-world-unit threshold by
+    // default. TCP trajectories are often smaller than that, so an axis can
+    // otherwise register as hovered from almost anywhere in the canvas.
+    // The trajectory and playback marker provide the intended hover targets.
+    segments.raycast = () => undefined;
+    segments.frustumCulled = false;
+    segments.renderOrder = 3;
+    return { geometry, material, segments };
+  }, []);
+  const axes = useMemo(
+    () =>
+      [
+        {
+          label: "X",
+          color: "#f87171",
+          direction: rotationColumn(rotation, 0),
+        },
+        {
+          label: "Y",
+          color: "#4ade80",
+          direction: rotationColumn(rotation, 1),
+        },
+        {
+          label: "Z",
+          color: "#60a5fa",
+          direction: rotationColumn(rotation, 2),
+        },
+      ] as const,
+    [rotation],
+  );
+  const sceneOrigin = useMemo(
+    () => new THREE.Vector3(...toScenePoint(...origin)),
+    [origin],
+  );
+  const endpoints = useMemo(
+    () =>
+      axes.map(
+        (axis) =>
+          new THREE.Vector3(
+            ...toScenePoint(
+              origin[0] + axis.direction[0] * size,
+              origin[1] + axis.direction[1] * size,
+              origin[2] + axis.direction[2] * size,
+            ),
+          ),
+      ),
+    [axes, origin, size],
+  );
+
+  useLayoutEffect(() => {
+    const positions = resources.geometry.getAttribute(
+      "position",
+    ) as THREE.BufferAttribute;
+    endpoints.forEach((endpoint, axisIndex) => {
+      positions.setXYZ(
+        axisIndex * 2,
+        sceneOrigin.x,
+        sceneOrigin.y,
+        sceneOrigin.z,
+      );
+      positions.setXYZ(axisIndex * 2 + 1, endpoint.x, endpoint.y, endpoint.z);
+    });
+    positions.needsUpdate = true;
+    resources.material.opacity = highlighted ? 1 : 0.8;
+  }, [endpoints, highlighted, resources, sceneOrigin]);
+
+  useEffect(
+    () => () => {
+      resources.geometry.dispose();
+      resources.material.dispose();
+    },
+    [resources],
+  );
 
   return (
     <group>
-      {axes.map((axis) => {
-        const endpoint = new THREE.Vector3(
-          ...toScenePoint(
-            origin[0] + axis.direction[0] * size,
-            origin[1] + axis.direction[1] * size,
-            origin[2] + axis.direction[2] * size,
-          ),
-        );
-        return (
+      <primitive object={resources.segments} />
+      {highlighted &&
+        axes.map((axis, index) => (
           <React.Fragment key={axis.label}>
-            <Line
-              points={[sceneOrigin, endpoint]}
-              color={axis.color}
-              lineWidth={highlighted ? 2.8 : 1.6}
-              transparent
-              opacity={highlighted ? 1 : 0.8}
-              depthWrite={false}
-              onPointerOver={(event) => {
-                event.stopPropagation();
-                onHover();
-              }}
-            />
             {highlighted && (
-              <Html position={endpoint} center>
+              <Html position={endpoints[index]} center>
                 <span
                   className="pointer-events-none rounded bg-slate-950/80 px-0.5 text-[8px] font-semibold leading-none"
                   style={{ color: axis.color }}
@@ -212,10 +285,82 @@ function PoseOrientationFrame({
               </Html>
             )}
           </React.Fragment>
-        );
-      })}
+        ))}
     </group>
   );
+}
+
+function ActiveTrajectoryLine({
+  points,
+  color,
+  playback,
+  highlighted,
+}: {
+  points: THREE.Vector3[];
+  color: string;
+  playback: EpisodePoseTrajectoryLocation;
+  highlighted: boolean;
+}) {
+  const resources = useMemo(() => {
+    const prefixGeometry = new THREE.BufferGeometry().setFromPoints(points);
+    prefixGeometry.setDrawRange(0, 0);
+    const connectorGeometry = new THREE.BufferGeometry();
+    connectorGeometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(new Float32Array(6), 3),
+    );
+    const material = new THREE.LineBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const prefix = new THREE.Line(prefixGeometry, material);
+    const connector = new THREE.Line(connectorGeometry, material);
+    prefix.frustumCulled = false;
+    connector.frustumCulled = false;
+    prefix.renderOrder = 2;
+    connector.renderOrder = 2;
+    const group = new THREE.Group();
+    group.add(prefix, connector);
+    return {
+      connector,
+      connectorGeometry,
+      group,
+      material,
+      prefixGeometry,
+    };
+  }, [color, points]);
+
+  useLayoutEffect(() => {
+    resources.prefixGeometry.setDrawRange(0, playback.completedPointCount);
+    resources.material.opacity = highlighted ? 1 : 0.9;
+
+    const hasConnector = playback.lowerIndex !== playback.upperIndex;
+    resources.connector.visible = hasConnector;
+    if (!hasConnector) return;
+
+    const start = points[playback.lowerIndex];
+    const end = toScenePoint(...playback.point);
+    const positions = resources.connectorGeometry.getAttribute(
+      "position",
+    ) as THREE.BufferAttribute;
+    positions.setXYZ(0, start.x, start.y, start.z);
+    positions.setXYZ(1, end[0], end[1], end[2]);
+    positions.needsUpdate = true;
+  }, [highlighted, playback, points, resources]);
+
+  useEffect(
+    () => () => {
+      resources.prefixGeometry.dispose();
+      resources.connectorGeometry.dispose();
+      resources.material.dispose();
+    },
+    [resources],
+  );
+
+  return <primitive object={resources.group} />;
 }
 
 function computeBounds(trajectories: EpisodePoseTrajectory[]): Bounds {
@@ -297,36 +442,15 @@ function PoseLine({
   }, [trajectory]);
 
   const playback = useMemo(
-    () => sampleEpisodePoseTrajectory(trajectory, currentTime),
+    () => locateEpisodePoseTrajectory(trajectory, currentTime),
     [currentTime, trajectory],
   );
   const rotation = useMemo(
     () => sampleEpisodePoseRotation(trajectory, currentTime),
     [currentTime, trajectory],
   );
-  const activePoints = useMemo(
-    () =>
-      playback
-        ? Array.from(
-            { length: Math.floor(playback.trailPoints.length / 3) },
-            (_, pointIndex) => {
-              const offset = pointIndex * 3;
-              return new THREE.Vector3(
-                ...toScenePoint(
-                  playback.trailPoints[offset],
-                  playback.trailPoints[offset + 1],
-                  playback.trailPoints[offset + 2],
-                ),
-              );
-            },
-          )
-        : [],
-    [playback],
-  );
-
-  const currentPoint = playback
-    ? new THREE.Vector3(...toScenePoint(...playback.point))
-    : null;
+  const currentPoint = playback ? toScenePoint(...playback.point) : null;
+  const color = trajectoryColor(trajectory);
 
   if (points.length < 2) return null;
 
@@ -334,7 +458,7 @@ function PoseLine({
     <group>
       <Line
         points={points}
-        color={trajectoryColor(trajectory)}
+        color={color}
         lineWidth={highlighted ? 3 : 1.2}
         transparent
         opacity={highlighted ? 0.5 : 0.16}
@@ -348,22 +472,12 @@ function PoseLine({
           onHover(null);
         }}
       />
-      {activePoints.length >= 2 && (
-        <Line
-          points={activePoints}
-          color={trajectoryColor(trajectory)}
-          lineWidth={highlighted ? 4 : 2.2}
-          transparent
-          opacity={highlighted ? 1 : 0.9}
-          depthWrite={false}
-          onPointerOver={(event) => {
-            event.stopPropagation();
-            onHover(trajectory.id);
-          }}
-          onPointerOut={(event) => {
-            event.stopPropagation();
-            onHover(null);
-          }}
+      {playback && (
+        <ActiveTrajectoryLine
+          points={points}
+          color={color}
+          playback={playback}
+          highlighted={highlighted}
         />
       )}
       {currentPoint && (
@@ -381,7 +495,7 @@ function PoseLine({
           >
             <sphereGeometry args={[pointRadius, 12, 12]} />
             <meshBasicMaterial
-              color={trajectoryColor(trajectory)}
+              color={color}
               transparent
               opacity={highlighted ? 1 : 0.95}
             />
@@ -392,7 +506,6 @@ function PoseLine({
               rotation={rotation}
               size={pointRadius * 3}
               highlighted={highlighted}
-              onHover={() => onHover(trajectory.id)}
             />
           )}
         </>
@@ -455,10 +568,16 @@ function CameraFit({
     const distance =
       (bounds.extent / (2 * Math.tan((perspective.fov * Math.PI) / 360))) *
       1.45;
+
+    // Robot/world convention for the initial view: +X points forward and +Z
+    // points up. In scene coordinates dataset Z maps to Three.js Y, so place
+    // the camera mainly behind -X, then add a small side/elevation offset to
+    // keep depth visible instead of looking exactly down the X axis.
+    perspective.up.set(0, 1, 0);
     perspective.position.set(
-      bounds.center.x + distance * 0.75,
+      bounds.center.x - distance * 0.9,
       bounds.center.y + distance * 0.55,
-      bounds.center.z + distance * 0.75,
+      bounds.center.z + distance * 0.35,
     );
     perspective.near = Math.max(distance / 1000, 0.001);
     perspective.far = Math.max(distance * 20, 100);
@@ -569,7 +688,7 @@ export default function EpisodePose3DViewer({
     (trajectory) => trajectory.id === hoveredId,
   );
   const hoveredPlayback = hoveredTrajectory
-    ? sampleEpisodePoseTrajectory(hoveredTrajectory, playbackTime)
+    ? locateEpisodePoseTrajectory(hoveredTrajectory, playbackTime)
     : null;
 
   useEffect(() => {
@@ -668,7 +787,10 @@ export default function EpisodePose3DViewer({
         )}
       </div>
 
-      <div className="relative h-[500px] overflow-hidden rounded-md border border-white/10 bg-slate-900">
+      <div
+        className="relative h-[500px] overflow-hidden rounded-md border border-white/10 bg-slate-900"
+        onPointerLeave={() => setHoveredId(null)}
+      >
         <PoseScene
           trajectories={visibleTrajectories}
           boundsTrajectories={trajectories}
