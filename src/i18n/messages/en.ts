@@ -778,6 +778,19 @@ export const en = {
   "urdf.trail": "Trail",
   "urdf.showTrail": "Show trail",
   "urdf.hideTrail": "Hide trail",
+  "urdf.tacCapMapping": "TacCap Gripper Mapping",
+  "urdf.tacCapMapped": "({mapped}/{total} grippers mapped)",
+  "urdf.tacCapSide": "Gripper",
+  "urdf.tacCapPose": "Recorded Pose",
+  "urdf.tacCapGripper": "Opening Column",
+  "urdf.tacCapOpening": "Opening",
+  "urdf.tacCapLink4Note":
+    "TCP frame: +X forward, +Y left, +Z up (red/green/blue reference axes). The viewer places link4 and drives joint1/joint2 together.",
+  "urdf.tacCapNoPose":
+    "No complete left_tcp/right_tcp xyz+r1-r6 trajectories were found for TacCap replay.",
+  "urdf.axisForward": "forward",
+  "urdf.axisLeft": "left",
+  "urdf.axisUp": "up",
 
   // ── charts (Episodes tab) ───────────────────────────────────────────────
   "chart.aria": "Episode chart data",

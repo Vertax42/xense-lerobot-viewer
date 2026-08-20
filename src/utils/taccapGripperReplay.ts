@@ -1,0 +1,216 @@
+import {
+  extractEpisodePoseTrajectories,
+  locateEpisodePoseTrajectory,
+  sampleEpisodePoseRotation,
+  type EpisodePoseTrajectory,
+  type RotationMatrix3,
+} from "@/utils/poseTrajectory3d";
+
+const SERIES_NAME_DELIMITER = " | ";
+
+export type TacCapSide = "left" | "right";
+
+export type TacCapGripperTrack = {
+  side: TacCapSide;
+  source: string;
+  pose: EpisodePoseTrajectory;
+  gripperKey: string | null;
+  gripperValues: Array<number | null>;
+  gripperRange: { min: number; max: number } | null;
+};
+
+export type TacCapGripperFrame = {
+  side: TacCapSide;
+  source: string;
+  position: [number, number, number];
+  rotation: RotationMatrix3;
+  /** Opening command normalized to the URDF joint range [0, 1]. */
+  opening: number;
+};
+
+function finiteNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function sourcePriority(source: string): number {
+  const lower = source.toLowerCase();
+  if (lower === "action") return 0;
+  if (lower === "observation.state") return 1;
+  return 2;
+}
+
+function findGripperKey(
+  rows: Record<string, number>[],
+  source: string,
+  side: TacCapSide,
+): string | null {
+  const expected = `${side}_gripper`;
+  for (const row of rows) {
+    for (const key of Object.keys(row)) {
+      if (key === "timestamp") continue;
+      const [keySource, ...featureParts] = key.split(SERIES_NAME_DELIMITER);
+      if (keySource?.trim() !== source) continue;
+      const feature = featureParts.join(SERIES_NAME_DELIMITER).trim();
+      if (
+        feature === expected ||
+        feature === `${expected}.pos` ||
+        feature === `${expected}.position` ||
+        feature === `${expected}.q`
+      ) {
+        return key;
+      }
+    }
+  }
+  return null;
+}
+
+function valueRange(
+  values: Array<number | null>,
+): { min: number; max: number } | null {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const value of values) {
+    if (value === null) continue;
+    min = Math.min(min, value);
+    max = Math.max(max, value);
+  }
+  return Number.isFinite(min) && Number.isFinite(max) ? { min, max } : null;
+}
+
+/**
+ * Pick one complete pose per physical gripper. Action is preferred because it
+ * is the commanded trajectory used for training; observation.state is the
+ * fallback for datasets that do not carry action poses.
+ */
+export function extractTacCapGripperTracks(
+  rows: Record<string, number>[],
+  preferredSource?: string,
+): TacCapGripperTrack[] {
+  const poses = extractEpisodePoseTrajectories(rows).filter(
+    (trajectory) =>
+      trajectory.rotationValues?.some((rotation) => rotation !== null) &&
+      (trajectory.label.toLowerCase() === "left_tcp" ||
+        trajectory.label.toLowerCase() === "right_tcp"),
+  );
+
+  return (["left", "right"] as const).flatMap((side) => {
+    const pose = poses
+      .filter((trajectory) => trajectory.label.toLowerCase() === `${side}_tcp`)
+      .sort((a, b) => {
+        const preferredDifference =
+          Number(b.source === preferredSource) -
+          Number(a.source === preferredSource);
+        return (
+          preferredDifference ||
+          sourcePriority(a.source) - sourcePriority(b.source)
+        );
+      })[0];
+    if (!pose) return [];
+
+    const gripperKey = findGripperKey(rows, pose.source, side);
+    const gripperValues = gripperKey
+      ? rows.flatMap((row) => {
+          const hasPose = pose.axisNames.every(
+            (axisName) => finiteNumber(row[axisName]) !== null,
+          );
+          return hasPose ? [finiteNumber(row[gripperKey])] : [];
+        })
+      : pose.timestamps.map(() => null);
+    return [
+      {
+        side,
+        source: pose.source,
+        pose,
+        gripperKey,
+        gripperValues,
+        gripperRange: valueRange(gripperValues),
+      },
+    ];
+  });
+}
+
+export function tacCapGripperSources(rows: Record<string, number>[]): string[] {
+  return [
+    ...new Set(
+      extractEpisodePoseTrajectories(rows)
+        .filter(
+          (trajectory) =>
+            trajectory.rotationValues?.some((rotation) => rotation !== null) &&
+            (trajectory.label.toLowerCase() === "left_tcp" ||
+              trajectory.label.toLowerCase() === "right_tcp"),
+        )
+        .map((trajectory) => trajectory.source),
+    ),
+  ].sort((a, b) => sourcePriority(a) - sourcePriority(b));
+}
+
+export function hasTacCapGripperTracks(
+  rows: Record<string, number>[],
+): boolean {
+  return extractTacCapGripperTracks(rows).length > 0;
+}
+
+/** Map a gripper sample to the URDF's unit opening range. */
+export function normalizeTacCapGripperOpening(
+  value: number | null,
+  range: { min: number; max: number } | null,
+): number {
+  if (value === null || !Number.isFinite(value)) return 0;
+
+  // TacCap recordings conventionally store gripper position in [0, 1]. Keep
+  // that physical convention even if an individual episode only exercises a
+  // small portion of the range; per-episode min/max scaling would exaggerate
+  // tiny finger motion into a fully open/closed animation.
+  if (range && range.min >= -1e-6 && range.max <= 1 + 1e-6) {
+    return Math.max(0, Math.min(1, value));
+  }
+  if (range && range.max > range.min) {
+    return Math.max(
+      0,
+      Math.min(1, (value - range.min) / (range.max - range.min)),
+    );
+  }
+  return Math.max(0, Math.min(1, value));
+}
+
+function nearestValue(
+  values: Array<number | null>,
+  preferredIndex: number,
+): number | null {
+  if (values[preferredIndex] !== null && values[preferredIndex] !== undefined) {
+    return values[preferredIndex];
+  }
+  for (let distance = 1; distance < values.length; distance += 1) {
+    const before = values[preferredIndex - distance];
+    if (before !== null && before !== undefined) return before;
+    const after = values[preferredIndex + distance];
+    if (after !== null && after !== undefined) return after;
+  }
+  return null;
+}
+
+export function sampleTacCapGripperFrame(
+  track: TacCapGripperTrack,
+  timeSeconds: number,
+): TacCapGripperFrame | null {
+  const location = locateEpisodePoseTrajectory(track.pose, timeSeconds);
+  const rotation = sampleEpisodePoseRotation(track.pose, timeSeconds);
+  if (!location || !rotation) return null;
+
+  const lowerValue = nearestValue(track.gripperValues, location.lowerIndex);
+  const upperValue = nearestValue(track.gripperValues, location.upperIndex);
+  const rawOpening =
+    lowerValue !== null && upperValue !== null
+      ? lowerValue + (upperValue - lowerValue) * location.alpha
+      : (lowerValue ?? upperValue);
+
+  return {
+    side: track.side,
+    source: track.source,
+    position: location.point,
+    rotation,
+    opening: normalizeTacCapGripperOpening(rawOpening, track.gripperRange),
+  };
+}

@@ -2,7 +2,7 @@
 
 ## What this project is
 
-A **local-only** LeRobot dataset visualizer (forked from huggingface/lerobot PR #1055 / @Mishig25). The Hugging Face Hub remote-loading path has been removed: every dataset is read directly from the filesystem via `/api/local-datasets/[encodedPath]/[...filePath]`. URDF/mesh assets for the 3D replay are still fetched from the public HF bucket `lerobot/robot-urdfs`.
+A **local-only** LeRobot dataset visualizer (forked from huggingface/lerobot PR #1055 / @Mishig25). The Hugging Face Hub remote-loading path has been removed: every dataset is read directly from the filesystem via `/api/local-datasets/[encodedPath]/[...filePath]`. Standard robot URDF/mesh assets for the 3D replay are fetched from the public HF bucket `lerobot/robot-urdfs`; TacCap data-collection gripper assets are bundled under `public/urdf/taccap-grippers`.
 
 **Two deliberate exceptions to "local-only"**, both added for the homepage dashboard — do not let either leak into the browse path:
 
@@ -286,7 +286,8 @@ Every user-facing panel is translated (625 keys). To extend: add keys to both di
 | `src/utils/byteSize.ts`                                           | The one `formatBytes` (binary units), shared by the parquet file picker and the homepage storage figures                                                           |
 | `src/utils/parquetBrowserClient.ts`                               | Client for the `…/[encodedPath]/parquet` + `/parquet/read` routes                                                                                                  |
 | `scripts/export_subtasks.py`                                      | pyarrow: compile `meta/annotations.json` → per-frame `subtask_index` + `meta/subtasks.parquet` + `info.json` (backup + verify)                                     |
-| `src/components/urdf-viewer.tsx`                                  | 3D viewer; loads URDFs from the HF bucket; `autoMatchJoints` does column→joint mapping (supports `.pos`/`.position`/`.q` suffixes)                                 |
+| `src/components/urdf-viewer.tsx`                                  | 3D viewer; loads standard URDFs from the HF bucket and bundled TacCap grippers; `autoMatchJoints` does column→joint mapping                                        |
+| `src/utils/taccapGripperReplay.ts`                                | TacCap left/right TCP + opening extraction, source selection, interpolation, and normalized finger command                                                         |
 | `src/utils/versionUtils.ts`                                       | `getDatasetInfo`, `getDatasetVersionAndInfo`, `buildVersionedUrl` (local-only)                                                                                     |
 | `src/utils/datasetRoute.ts`                                       | `local:` repoId wrapper, base64url encode, route ↔ repoId conversion                                                                                               |
 | `src/utils/stringFormatting.ts`                                   | `buildV3DataPath`, `buildV3VideoPath`, `buildV3EpisodesMetadataPath`, padding helpers                                                                              |
@@ -331,6 +332,7 @@ Reserved/bookkeeping columns from lerobot — see `EXCLUDED_COLUMNS` in `src/uti
 
 - URDFs and meshes are hosted in the HF bucket `lerobot/robot-urdfs` — base URL `https://huggingface.co/buckets/lerobot/robot-urdfs/resolve` (no `/main` segment; buckets are unbranched). Override with `NEXT_PUBLIC_URDF_BASE_URL` for local development.
 - Asset layout under the bucket: `g1/`, `openarm/`, `so101/` (both SO-100 and SO-101 live here).
+- TacCap is the exception: `bi_taccap_gripper` loads the project-local left/right assets from `public/urdf/taccap-grippers`. Recorded `left_tcp` / `right_tcp` poses use one canonical frame (`+X forward, +Y left, +Z up`). Recover the model root from the measured `base_link -> link4` translation, but do **not** reuse the left URDF's local `-90°` link4 rotation: that rotation only orients its CAD marker mesh and would turn the entire left gripper sideways when applied to the already canonical TCP rotation. Drive `joint2` in `[-1, 0]`; URDF mimic drives `joint1` with multiplier `-1`. Prefer `action`, with `observation.state` available as a source toggle.
 - `getRobotConfig` defaults to **`so101_new_calib.urdf`** for any `robot_type` that doesn't match G1/OpenArm. The legacy `so100.urdf` is only used when `robot_type` is literally `so100` / `so_100` / contains `so100_arm`. **This means `so100_follower` (lerobot 0.4+ catch-all term) goes through SO-101.**
 - `autoMatchJoints` tolerates `.pos` / `.position` / `.q` suffixes on column names, so SO-101 features like `shoulder_pan.pos` auto-match the URDF joint `shoulder_pan`.
 - **URDFLoader gotcha**: after our `loadMeshCb` returns, `URDFLoader.js` does `if (obj instanceof THREE.Mesh) obj.material = <urdf-material>`, overwriting any material we set. Workaround: wrap the loaded mesh in a `THREE.Group` so the `instanceof Mesh` check fails. DAE returns a Group already; STL must be wrapped explicitly.

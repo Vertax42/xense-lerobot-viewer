@@ -755,6 +755,19 @@ export const zh: Record<MessageKey, string> = {
   "urdf.trail": "轨迹",
   "urdf.showTrail": "显示轨迹线",
   "urdf.hideTrail": "隐藏轨迹线",
+  "urdf.tacCapMapping": "TacCap 夹爪映射",
+  "urdf.tacCapMapped": "（已映射 {mapped}/{total} 个夹爪）",
+  "urdf.tacCapSide": "夹爪",
+  "urdf.tacCapPose": "记录位姿",
+  "urdf.tacCapGripper": "开合数据列",
+  "urdf.tacCapOpening": "开合量",
+  "urdf.tacCapLink4Note":
+    "TCP 坐标系：+X 向前、+Y 向左、+Z 向上（对应红/绿/蓝参考轴）。播放器定位 link4，并同步驱动 joint1/joint2。",
+  "urdf.tacCapNoPose":
+    "未找到可用于 TacCap 回放的完整 left_tcp/right_tcp xyz+r1-r6 轨迹。",
+  "urdf.axisForward": "向前",
+  "urdf.axisLeft": "向左",
+  "urdf.axisUp": "向上",
 
   // ── charts (Episodes tab) ───────────────────────────────────────────────
   "chart.aria": "Episode 图表数据",
