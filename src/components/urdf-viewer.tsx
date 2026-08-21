@@ -9,7 +9,7 @@ import React, {
   useCallback,
 } from "react";
 import { Canvas, useThree, useFrame } from "@react-three/fiber";
-import { OrbitControls, Grid, Html } from "@react-three/drei";
+import { OrbitControls, Grid, Html, RoundedBox } from "@react-three/drei";
 import * as THREE from "three";
 import URDFLoader from "urdf-loader";
 import type { URDFRobot } from "urdf-loader";
@@ -266,6 +266,7 @@ const SINGLE_ARM_TIP_NAMES = [
 const DUAL_ARM_TIP_NAMES = ["openarm_left_hand_tcp", "openarm_right_hand_tcp"];
 const G1_TIP_NAMES = ["left_hand_palm_link", "right_hand_palm_link"];
 const TRAIL_DURATION = 1.0;
+const TACCAP_TRAIL_DURATION = 3.0;
 const TRAIL_COLORS = [new THREE.Color("#ff6600"), new THREE.Color("#00aaff")];
 const MAX_TRAIL_POINTS = 300;
 
@@ -278,6 +279,14 @@ const TACCAP_TRAIL_COLOR: Record<TacCapSide, string> = {
   right: "#f472b6",
 };
 const TACCAP_HEAD_COLOR = "#facc15";
+const TACCAP_HEADSET = {
+  // Approximate physical dimensions in metres. The recorded head pose remains
+  // the model origin; no unmeasured tracker -> headset offset is introduced.
+  bodyDepth: 0.072,
+  bodyWidth: 0.19,
+  bodyHeight: 0.095,
+  rearX: -0.145,
+} as const;
 const TACCAP_LOCAL_POSE_AXES = [
   { label: "X", direction: [1, 0, 0] as const, color: "#ef4444" },
   { label: "Y", direction: [0, 1, 0] as const, color: "#22c55e" },
@@ -334,28 +343,46 @@ function applyTacCapGripperFrame(
 }
 
 function TacCapAxisArrow({
+  alwaysVisible = false,
   color,
   direction,
   label,
   length,
+  showLabel = true,
 }: {
+  alwaysVisible?: boolean;
   color: string;
   direction: readonly [number, number, number];
   label: string;
   length: number;
+  showLabel?: boolean;
 }) {
-  const arrow = useMemo(
-    () =>
-      new THREE.ArrowHelper(
-        new THREE.Vector3(...direction),
-        new THREE.Vector3(),
-        length,
-        color,
-        length * 0.2,
-        length * 0.1,
-      ),
-    [color, direction, length],
-  );
+  const arrow = useMemo(() => {
+    const helper = new THREE.ArrowHelper(
+      new THREE.Vector3(...direction),
+      new THREE.Vector3(),
+      length,
+      color,
+      length * 0.2,
+      length * 0.1,
+    );
+    if (alwaysVisible) {
+      helper.traverse((child) => {
+        child.renderOrder = 21;
+        if (!(child instanceof THREE.Line || child instanceof THREE.Mesh)) {
+          return;
+        }
+        const materials = Array.isArray(child.material)
+          ? child.material
+          : [child.material];
+        materials.forEach((material) => {
+          material.depthTest = false;
+          material.depthWrite = false;
+        });
+      });
+    }
+    return helper;
+  }, [alwaysVisible, color, direction, length]);
   const labelPosition = useMemo(
     () =>
       new THREE.Vector3(...direction)
@@ -385,19 +412,21 @@ function TacCapAxisArrow({
   return (
     <>
       <primitive object={arrow} />
-      <Html
-        center
-        position={labelPosition}
-        style={{ pointerEvents: "none" }}
-        zIndexRange={[10, 0]}
-      >
-        <span
-          className="rounded border border-white/15 bg-slate-950/85 px-1 py-0.5 font-mono text-[9px] font-semibold leading-none shadow"
-          style={{ color }}
+      {showLabel && (
+        <Html
+          center
+          position={labelPosition}
+          style={{ pointerEvents: "none" }}
+          zIndexRange={[10, 0]}
         >
-          {label}
-        </span>
-      </Html>
+          <span
+            className="rounded border border-white/15 bg-slate-950/85 px-1 py-0.5 font-mono text-[9px] font-semibold leading-none shadow"
+            style={{ color }}
+          >
+            {label}
+          </span>
+        </Html>
+      )}
     </>
   );
 }
@@ -621,77 +650,244 @@ function TacCapGripperModel({
   return null;
 }
 
+/**
+ * TacCap playback trail matching the original 3D Replay treatment: a 4 px
+ * Line2 whose colour fades from black at the one-second tail to the track's
+ * full colour at the current playback point. TacCap keeps three seconds of
+ * history so the dark tail remains useful during slow motions.
+ */
 function TacCapPoseTrail({
+  alwaysVisible = false,
   color,
   enabled,
   pose,
   timeSeconds,
 }: {
+  alwaysVisible?: boolean;
   color: string;
   enabled: boolean;
   pose: EpisodePoseTrajectory;
   timeSeconds: number;
 }) {
-  const resources = useMemo(() => {
+  const viewportSize = useThree((state) => state.size);
+  const trailColor = useMemo(() => new THREE.Color(color), [color]);
+  const scenePositions = useMemo(() => {
     const positions = new Float32Array(pose.points.length);
     for (let index = 0; index + 2 < pose.points.length; index += 3) {
-      const scenePoint = tacCapDatasetPointToScene([
+      const point = tacCapDatasetPointToScene([
         pose.points[index],
         pose.points[index + 1],
         pose.points[index + 2],
       ]);
-      positions[index] = scenePoint[0];
-      positions[index + 1] = scenePoint[1];
-      positions[index + 2] = scenePoint[2];
+      positions[index] = point[0];
+      positions[index + 1] = point[1];
+      positions[index + 2] = point[2];
     }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    geometry.setDrawRange(0, 0);
-    const material = new THREE.LineBasicMaterial({
-      color,
-      transparent: true,
-      opacity: 0.85,
+    return positions;
+  }, [pose]);
+  const resources = useMemo(() => {
+    const material = new LineMaterial({
+      color: 0xffffff,
+      depthTest: !alwaysVisible,
       depthWrite: false,
-      toneMapped: false,
+      linewidth: 4,
+      transparent: true,
+      vertexColors: true,
+      worldUnits: false,
     });
-    const line = new THREE.Line(geometry, material);
+    const line = new Line2(new LineGeometry(), material);
     line.frustumCulled = false;
     line.raycast = () => undefined;
-    line.renderOrder = 2;
-    return { geometry, line, material };
-  }, [color, pose]);
+    line.renderOrder = alwaysVisible ? 20 : 2;
+    line.visible = false;
+    return { line, material };
+  }, [alwaysVisible]);
+
+  useLayoutEffect(() => {
+    resources.material.resolution.set(viewportSize.width, viewportSize.height);
+  }, [resources, viewportSize.height, viewportSize.width]);
 
   useLayoutEffect(() => {
     if (!enabled) {
-      resources.geometry.setDrawRange(0, 0);
+      resources.line.visible = false;
       return;
     }
     const start = locateEpisodePoseTrajectory(
       pose,
-      Math.max(0, timeSeconds - TRAIL_DURATION),
+      Math.max(0, timeSeconds - TACCAP_TRAIL_DURATION),
     );
     const end = locateEpisodePoseTrajectory(pose, timeSeconds);
     if (!start || !end) {
-      resources.geometry.setDrawRange(0, 0);
+      resources.line.visible = false;
       return;
     }
     const startIndex = start.lowerIndex;
     const endIndex = Math.max(startIndex, end.completedPointCount - 1);
-    resources.geometry.setDrawRange(
-      startIndex,
-      Math.max(0, endIndex - startIndex + 1),
-    );
-  }, [enabled, pose, resources, timeSeconds]);
+    const completedPointCount = endIndex - startIndex + 1;
+    const includeInterpolatedPoint =
+      end.lowerIndex !== end.upperIndex && end.alpha > 0;
+    const visiblePointCount =
+      completedPointCount + Number(includeInterpolatedPoint);
+    if (visiblePointCount < 2) {
+      resources.line.visible = false;
+      return;
+    }
+
+    const positions = new Float32Array(visiblePointCount * 3);
+    const colors = new Float32Array(visiblePointCount * 3);
+    for (
+      let pointIndex = 0;
+      pointIndex < completedPointCount;
+      pointIndex += 1
+    ) {
+      const sourceIndex = startIndex + pointIndex;
+      const sourceOffset = sourceIndex * 3;
+      const targetOffset = pointIndex * 3;
+      positions[targetOffset] = scenePositions[sourceOffset];
+      positions[targetOffset + 1] = scenePositions[sourceOffset + 1];
+      positions[targetOffset + 2] = scenePositions[sourceOffset + 2];
+
+      // Same time-based fade used by the original RobotScene trail. The
+      // oldest point reaches black while the latest point remains saturated.
+      const sampleTime = pose.timestamps[sourceIndex] ?? timeSeconds;
+      const intensity = Math.max(
+        0,
+        1 - (timeSeconds - sampleTime) / TACCAP_TRAIL_DURATION,
+      );
+      colors[targetOffset] = trailColor.r * intensity;
+      colors[targetOffset + 1] = trailColor.g * intensity;
+      colors[targetOffset + 2] = trailColor.b * intensity;
+    }
+    if (includeInterpolatedPoint) {
+      const offset = completedPointCount * 3;
+      const point = tacCapDatasetPointToScene(end.point);
+      positions[offset] = point[0];
+      positions[offset + 1] = point[1];
+      positions[offset + 2] = point[2];
+      colors[offset] = trailColor.r;
+      colors[offset + 1] = trailColor.g;
+      colors[offset + 2] = trailColor.b;
+    }
+
+    // Match RobotScene's original trail implementation exactly. Replacing
+    // LineGeometry after position/colour attributes exist ensures Line2's
+    // vertex-colour shader is compiled with the gradient attributes.
+    const geometry = new LineGeometry();
+    geometry.setPositions(Array.from(positions));
+    geometry.setColors(Array.from(colors));
+    resources.line.geometry.dispose();
+    resources.line.geometry = geometry;
+    resources.line.computeLineDistances();
+    resources.line.visible = true;
+  }, [enabled, pose, resources, scenePositions, timeSeconds, trailColor]);
 
   useEffect(
     () => () => {
-      resources.geometry.dispose();
+      resources.line.geometry.dispose();
       resources.material.dispose();
     },
     [resources],
   );
 
   return <primitive object={resources.line} />;
+}
+
+/**
+ * Lightweight, project-local HMD representation. It intentionally uses only
+ * Three.js primitives so 3D Replay never depends on another downloadable
+ * model. Local +X is the visor/front direction, +Y is left, and +Z is up.
+ */
+function TacCapHeadsetModel({ originRadius }: { originRadius: number }) {
+  const { bodyDepth, bodyHeight, bodyWidth, rearX } = TACCAP_HEADSET;
+
+  return (
+    <group>
+      {/* Main headset shell and dark front visor. */}
+      <RoundedBox
+        args={[bodyDepth, bodyWidth, bodyHeight]}
+        radius={0.016}
+        smoothness={4}
+        castShadow
+        receiveShadow
+      >
+        <meshStandardMaterial
+          color="#cbd5e1"
+          metalness={0.12}
+          roughness={0.38}
+        />
+      </RoundedBox>
+      <RoundedBox
+        args={[0.012, bodyWidth - 0.016, bodyHeight - 0.016]}
+        position={[bodyDepth / 2 + 0.004, 0, 0]}
+        radius={0.004}
+        smoothness={4}
+        castShadow
+      >
+        <meshStandardMaterial
+          color="#0f172a"
+          metalness={0.55}
+          roughness={0.2}
+        />
+      </RoundedBox>
+
+      {/* Two front tracking cameras make the forward direction unambiguous. */}
+      {([-1, 1] as const).map((side) => (
+        <group
+          key={`camera:${side}`}
+          position={[bodyDepth / 2 + 0.012, side * 0.046, -0.002]}
+          rotation={[0, 0, -Math.PI / 2]}
+        >
+          <mesh castShadow>
+            <cylinderGeometry args={[0.014, 0.014, 0.01, 24]} />
+            <meshStandardMaterial
+              color="#1e293b"
+              metalness={0.6}
+              roughness={0.2}
+            />
+          </mesh>
+          <mesh position={[0, 0.0055, 0]}>
+            <cylinderGeometry args={[0.008, 0.008, 0.002, 24]} />
+            <meshStandardMaterial
+              color="#38bdf8"
+              emissive="#075985"
+              emissiveIntensity={0.45}
+              metalness={0.25}
+              roughness={0.12}
+            />
+          </mesh>
+        </group>
+      ))}
+
+      {/* Side and rear bands indicate how the display is worn. */}
+      {([-1, 1] as const).map((side) => (
+        <RoundedBox
+          key={`side-strap:${side}`}
+          args={[0.17, 0.012, 0.022]}
+          position={[-0.065, side * (bodyWidth / 2 + 0.002), 0.004]}
+          radius={0.005}
+          smoothness={3}
+          castShadow
+        >
+          <meshStandardMaterial color="#64748b" roughness={0.72} />
+        </RoundedBox>
+      ))}
+      <RoundedBox
+        args={[0.025, bodyWidth + 0.004, 0.028]}
+        position={[rearX, 0, 0.004]}
+        radius={0.007}
+        smoothness={3}
+        castShadow
+      >
+        <meshStandardMaterial color="#475569" roughness={0.75} />
+      </RoundedBox>
+
+      {/* Preserve the exact sampled pose origin inside the schematic model. */}
+      <mesh>
+        <sphereGeometry args={[originRadius, 16, 12]} />
+        <meshBasicMaterial color={TACCAP_HEAD_COLOR} toneMapped={false} />
+      </mesh>
+    </group>
+  );
 }
 
 function TacCapHeadMarker({
@@ -712,26 +908,19 @@ function TacCapHeadMarker({
   );
   if (!transform) return null;
 
-  const axisLength = size * 2.6;
+  const axisLength = Math.max(size, 0.04);
   return (
     <group matrix={transform} matrixAutoUpdate={false}>
-      <mesh>
-        <sphereGeometry args={[size, 16, 12]} />
-        <meshBasicMaterial color={TACCAP_HEAD_COLOR} toneMapped={false} />
-      </mesh>
+      <TacCapHeadsetModel originRadius={size} />
       {TACCAP_LOCAL_POSE_AXES.map((axis) => (
-        <TacCapAxisArrow key={axis.label} length={axisLength} {...axis} />
+        <TacCapAxisArrow
+          key={axis.label}
+          alwaysVisible
+          length={axisLength}
+          showLabel={false}
+          {...axis}
+        />
       ))}
-      <Html
-        center
-        position={[0, size * 4.5, 0]}
-        style={{ pointerEvents: "none" }}
-        zIndexRange={[10, 0]}
-      >
-        <span className="rounded border border-yellow-300/30 bg-slate-950/90 px-1.5 py-0.5 font-mono text-[9px] font-semibold leading-none text-yellow-300 shadow">
-          head
-        </span>
-      </Html>
     </group>
   );
 }
@@ -803,6 +992,7 @@ function TacCapGripperScene({
       ))}
       {headTrack && (
         <TacCapPoseTrail
+          alwaysVisible
           color={TACCAP_HEAD_COLOR}
           enabled={trailEnabled}
           pose={headTrack.pose}

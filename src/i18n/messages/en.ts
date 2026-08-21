@@ -785,7 +785,7 @@ export const en = {
   "urdf.tacCapGripper": "Opening Column",
   "urdf.tacCapOpening": "Opening",
   "urdf.tacCapLink4Note":
-    "TCP frame: +X forward, +Y left, +Z up (red/green/blue reference axes). A yellow head trail and playback frame appear only when complete head.xyz+r1-r6 data exists; head video alone does not create a trajectory.",
+    "TCP frame: +X forward, +Y left, +Z up (red/green/blue reference axes). Complete head.xyz+r1-r6 data adds a yellow trail, schematic HMD, and playback frame. The HMD is centered on the recorded head pose with its visor facing +X; no uncalibrated offset is added. Head video alone does not create a trajectory.",
   "urdf.tacCapNoPose":
     "No complete left_tcp/right_tcp xyz+r1-r6 trajectories were found for TacCap replay.",
   "urdf.tacCapPoseMode": "Pose mode",
