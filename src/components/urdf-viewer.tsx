@@ -267,6 +267,8 @@ const DUAL_ARM_TIP_NAMES = ["openarm_left_hand_tcp", "openarm_right_hand_tcp"];
 const G1_TIP_NAMES = ["left_hand_palm_link", "right_hand_palm_link"];
 const TRAIL_DURATION = 1.0;
 const TACCAP_TRAIL_DURATION = 3.0;
+const TACCAP_TRAIL_SOLID_COLOR_DURATION = 1.0;
+const TACCAP_TRAIL_MIN_COLOR_INTENSITY = 0.35;
 const TRAIL_COLORS = [new THREE.Color("#ff6600"), new THREE.Color("#00aaff")];
 const MAX_TRAIL_POINTS = 300;
 
@@ -651,10 +653,11 @@ function TacCapGripperModel({
 }
 
 /**
- * TacCap playback trail matching the original 3D Replay treatment: a 4 px
- * Line2 whose colour fades from black at the one-second tail to the track's
- * full colour at the current playback point. TacCap keeps three seconds of
- * history so the dark tail remains useful during slow motions.
+ * TacCap playback trail matching the original 3D Replay treatment: a 2 px
+ * Line2 whose older section brightens within the track's own colour instead
+ * of fading to black. The newest section then stays at the full track colour
+ * for a short period. TacCap keeps three seconds of history so the trail
+ * remains useful during slow motions.
  */
 function TacCapPoseTrail({
   alwaysVisible = false,
@@ -690,7 +693,7 @@ function TacCapPoseTrail({
       color: 0xffffff,
       depthTest: !alwaysVisible,
       depthWrite: false,
-      linewidth: 4,
+      linewidth: 2,
       transparent: true,
       vertexColors: true,
       worldUnits: false,
@@ -747,13 +750,22 @@ function TacCapPoseTrail({
       positions[targetOffset + 1] = scenePositions[sourceOffset + 1];
       positions[targetOffset + 2] = scenePositions[sourceOffset + 2];
 
-      // Same time-based fade used by the original RobotScene trail. The
-      // oldest point reaches black while the latest point remains saturated.
+      // Keep the tail in the trajectory's own hue: the older two seconds
+      // brighten from a visible same-colour tint, then the newest second
+      // remains at full colour instead of immediately entering a fade.
       const sampleTime = pose.timestamps[sourceIndex] ?? timeSeconds;
-      const intensity = Math.max(
-        0,
-        1 - (timeSeconds - sampleTime) / TACCAP_TRAIL_DURATION,
+      const age = Math.max(0, timeSeconds - sampleTime);
+      const gradientDuration = Math.max(
+        Number.EPSILON,
+        TACCAP_TRAIL_DURATION - TACCAP_TRAIL_SOLID_COLOR_DURATION,
       );
+      const gradientProgress = Math.max(
+        0,
+        Math.min(1, (TACCAP_TRAIL_DURATION - age) / gradientDuration),
+      );
+      const intensity =
+        TACCAP_TRAIL_MIN_COLOR_INTENSITY +
+        (1 - TACCAP_TRAIL_MIN_COLOR_INTENSITY) * gradientProgress;
       colors[targetOffset] = trailColor.r * intensity;
       colors[targetOffset + 1] = trailColor.g * intensity;
       colors[targetOffset + 2] = trailColor.b * intensity;
