@@ -1554,10 +1554,12 @@ export default function URDFViewer({
   data,
   active,
   playToggleRef,
+  seekByRef,
 }: {
   data: EpisodeData;
   active: boolean;
   playToggleRef?: React.RefObject<(() => void) | undefined>;
+  seekByRef?: React.RefObject<((seconds: number) => void) | undefined>;
 }) {
   const t = useT();
   const { datasetInfo } = data;
@@ -1785,9 +1787,53 @@ export default function URDFViewer({
     setReplayRevision((revision) => revision + 1);
   }, [playbackDisabled]);
 
+  const handleSeekBy = useCallback(
+    (seconds: number) => {
+      if (playbackDisabled || totalFrames === 0) return;
+      const targetTime = Math.max(0, replayTimeSeconds + seconds);
+      let targetFrame: number;
+      if (chartData.length > 0) {
+        // Locate the closest sampled dataset frame so 3D poses and videos
+        // remain on the same episode timestamp after a keyboard seek.
+        let low = 0;
+        let high = chartData.length - 1;
+        while (low < high) {
+          const middle = Math.floor((low + high) / 2);
+          if ((chartData[middle]?.timestamp ?? middle / fps) < targetTime) {
+            low = middle + 1;
+          } else {
+            high = middle;
+          }
+        }
+        const upper = low;
+        const lower = Math.max(0, upper - 1);
+        const upperTime = chartData[upper]?.timestamp ?? upper / fps;
+        const lowerTime = chartData[lower]?.timestamp ?? lower / fps;
+        targetFrame =
+          Math.abs(targetTime - lowerTime) <= Math.abs(upperTime - targetTime)
+            ? lower
+            : upper;
+      } else {
+        targetFrame = Math.round(targetTime * fps);
+      }
+      targetFrame = Math.max(0, Math.min(totalFrames - 1, targetFrame));
+      frameRef.current = targetFrame;
+      setFrame(targetFrame);
+      // Treat keyboard/button jumps like Episodes external seeks: force each
+      // video to the exact target and clear trails that would otherwise draw
+      // a false line across the skipped five-second interval.
+      setReplayRevision((revision) => revision + 1);
+    },
+    [chartData, fps, playbackDisabled, replayTimeSeconds, totalFrames],
+  );
+
   useEffect(() => {
     if (playToggleRef) playToggleRef.current = handlePlayPause;
   }, [playToggleRef, handlePlayPause]);
+
+  useEffect(() => {
+    if (seekByRef) seekByRef.current = handleSeekBy;
+  }, [handleSeekBy, seekByRef]);
 
   // Filter out mimic joints (finger_joint2) from the UI list
   const displayJointNames = useMemo(
@@ -2050,6 +2096,8 @@ export default function URDFViewer({
           totalFrames={totalFrames}
           fps={fps}
           playing={playing}
+          onBackward={() => handleSeekBy(-5)}
+          onForward={() => handleSeekBy(5)}
           onPlayPause={handlePlayPause}
           onReplay={handleReplay}
           trailEnabled={trailEnabled}
@@ -2060,6 +2108,7 @@ export default function URDFViewer({
 
         {/* Collapsible joint mapping */}
         <button
+          type="button"
           onClick={() => setShowMapping((v) => !v)}
           className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors"
         >
@@ -2092,6 +2141,7 @@ export default function URDFViewer({
                 {(isTacCap ? tacCapSources : groupNames).map((name) => (
                   <button
                     key={name}
+                    type="button"
                     onClick={() => setSelectedGroup(name)}
                     className={`px-2 py-1 text-xs rounded transition-colors ${
                       selectedGroup === name

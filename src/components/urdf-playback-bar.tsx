@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { FaUndoAlt } from "react-icons/fa";
+import { FaBackward, FaForward, FaUndoAlt } from "react-icons/fa";
 import { useT } from "@/context/locale-context";
 
 interface UrdfPlaybackBarProps {
@@ -9,6 +9,8 @@ interface UrdfPlaybackBarProps {
   totalFrames: number;
   fps: number;
   playing: boolean;
+  onBackward: () => void;
+  onForward: () => void;
   onPlayPause: () => void;
   onReplay: () => void;
   trailEnabled: boolean;
@@ -22,6 +24,8 @@ export default function UrdfPlaybackBar({
   totalFrames,
   fps,
   playing,
+  onBackward,
+  onForward,
   onPlayPause,
   onReplay,
   trailEnabled,
@@ -38,8 +42,22 @@ export default function UrdfPlaybackBar({
       className={`flex items-center gap-3 ${disabled ? "opacity-50" : ""}`}
       aria-busy={disabled}
     >
-      {/* Play/Pause */}
+      {/* Match the Episodes playback controls: back, play, forward, rewind. */}
       <button
+        type="button"
+        title={t("player.back5")}
+        aria-label={t("player.back5")}
+        onClick={onBackward}
+        disabled={disabled}
+        className="w-8 h-8 flex items-center justify-center rounded-md bg-white/5 border border-white/10 text-slate-300 hover:bg-cyan-400/10 hover:border-cyan-400/30 hover:text-cyan-300 disabled:bg-white/5 disabled:border-white/5 disabled:text-slate-500 disabled:cursor-not-allowed transition-colors shrink-0"
+      >
+        <FaBackward aria-hidden="true" size={14} />
+      </button>
+
+      <button
+        type="button"
+        title={playing ? t("player.pause") : t("player.play")}
+        aria-label={playing ? t("player.pause") : t("player.play")}
         onClick={onPlayPause}
         disabled={disabled}
         className="w-8 h-8 flex items-center justify-center rounded-md bg-cyan-400/10 border border-cyan-400/30 text-cyan-300 hover:bg-cyan-400/15 disabled:bg-white/5 disabled:border-white/5 disabled:text-slate-500 disabled:cursor-not-allowed transition-colors shrink-0"
@@ -56,6 +74,17 @@ export default function UrdfPlaybackBar({
         )}
       </button>
 
+      <button
+        type="button"
+        title={t("player.forward5")}
+        aria-label={t("player.forward5")}
+        onClick={onForward}
+        disabled={disabled}
+        className="w-8 h-8 flex items-center justify-center rounded-md bg-white/5 border border-white/10 text-slate-300 hover:bg-cyan-400/10 hover:border-cyan-400/30 hover:text-cyan-300 disabled:bg-white/5 disabled:border-white/5 disabled:text-slate-500 disabled:cursor-not-allowed transition-colors shrink-0"
+      >
+        <FaForward aria-hidden="true" size={14} />
+      </button>
+
       {/* Replay from the first frame */}
       <button
         type="button"
@@ -70,6 +99,7 @@ export default function UrdfPlaybackBar({
 
       {/* Trail toggle */}
       <button
+        type="button"
         onClick={onTrailToggle}
         disabled={disabled}
         className={`px-2 h-8 text-xs rounded transition-colors shrink-0 disabled:cursor-not-allowed ${
@@ -109,6 +139,9 @@ export default function UrdfPlaybackBar({
         </p>
         <p>
           <span className="font-mono">↑/↓</span> {t("player.hintArrows")}
+        </p>
+        <p>
+          <span className="font-mono">←/→</span> {t("urdf.hintSeek5")}
         </p>
       </div>
     </div>

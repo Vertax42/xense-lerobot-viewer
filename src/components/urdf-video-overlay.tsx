@@ -403,7 +403,7 @@ export default function UrdfVideoOverlay({
           {...resizeLabels}
           activeLayer={frontLayer === "left"}
           className="absolute left-3 top-3"
-          defaultWidth="clamp(7.5rem, 17vw, 13.5rem)"
+          defaultWidth="clamp(13rem, 28vw, 22rem)"
           maxWidth={520}
           maxWidthRatio={0.42}
           minWidth={120}
@@ -447,7 +447,7 @@ export default function UrdfVideoOverlay({
           {...resizeLabels}
           activeLayer={frontLayer === "right"}
           className="absolute right-3 top-3"
-          defaultWidth="clamp(7.5rem, 17vw, 13.5rem)"
+          defaultWidth="clamp(13rem, 28vw, 22rem)"
           maxWidth={520}
           maxWidthRatio={0.42}
           minWidth={120}

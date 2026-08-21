@@ -778,6 +778,7 @@ export const en = {
   "urdf.trail": "Trail",
   "urdf.showTrail": "Show trail",
   "urdf.hideTrail": "Hide trail",
+  "urdf.hintSeek5": "back/forward 5 seconds",
   "urdf.resizeVideo": "Drag to resize video window",
   "urdf.resetVideoSize": "Double-click to reset size",
   "urdf.tacCapMapping": "TacCap Gripper Mapping",

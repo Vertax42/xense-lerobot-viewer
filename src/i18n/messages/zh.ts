@@ -755,6 +755,7 @@ export const zh: Record<MessageKey, string> = {
   "urdf.trail": "轨迹",
   "urdf.showTrail": "显示轨迹线",
   "urdf.hideTrail": "隐藏轨迹线",
+  "urdf.hintSeek5": "后退/快进 5 秒",
   "urdf.resizeVideo": "拖动以缩放视频窗口",
   "urdf.resetVideoSize": "双击恢复默认大小",
   "urdf.tacCapMapping": "TacCap 夹爪映射",

@@ -73,13 +73,7 @@ function isKeyboardFocusInsideTextEntry(target: EventTarget | null): boolean {
     return true;
   }
   const tag = target.tagName;
-  return (
-    tag === "TEXTAREA" ||
-    tag === "SELECT" ||
-    tag === "INPUT" ||
-    tag === "BUTTON" ||
-    (tag === "A" && target.hasAttribute("href"))
-  );
+  return tag === "TEXTAREA" || tag === "SELECT" || tag === "INPUT";
 }
 
 type ActiveTab =
@@ -581,6 +575,9 @@ function EpisodeViewerInner({
 
   // URDF playback toggle — populated by URDFViewer after its first mount.
   const urdfPlayToggleRef = useRef<(() => void) | undefined>(undefined);
+  const urdfSeekByRef = useRef<((seconds: number) => void) | undefined>(
+    undefined,
+  );
   const [urdfMounted, setUrdfMounted] = useState(activeTab === "urdf");
 
   useEffect(() => {
@@ -662,6 +659,13 @@ function EpisodeViewerInner({
         ) {
           s.onEpisodeSelect(nextEpisodeId);
         }
+      } else if (
+        s.activeTab === "urdf" &&
+        (key === "ArrowLeft" || key === "ArrowRight")
+      ) {
+        if (inTextEntry) return;
+        e.preventDefault();
+        urdfSeekByRef.current?.(key === "ArrowLeft" ? -5 : 5);
       }
     };
 
@@ -1004,6 +1008,7 @@ function EpisodeViewerInner({
                     activeTab === "urdf" && !episodeLoading && !episodeError
                   }
                   playToggleRef={urdfPlayToggleRef}
+                  seekByRef={urdfSeekByRef}
                 />
               </Suspense>
             </div>
