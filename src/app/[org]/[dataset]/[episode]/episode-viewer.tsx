@@ -73,7 +73,10 @@ function isKeyboardFocusInsideTextEntry(target: EventTarget | null): boolean {
     return true;
   }
   const tag = target.tagName;
-  return tag === "TEXTAREA" || tag === "SELECT" || tag === "INPUT";
+  if (tag === "INPUT") {
+    return (target as HTMLInputElement).type !== "range";
+  }
+  return tag === "TEXTAREA" || tag === "SELECT";
 }
 
 type ActiveTab =
