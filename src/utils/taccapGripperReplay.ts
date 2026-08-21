@@ -1,14 +1,22 @@
 import {
   extractEpisodePoseTrajectories,
   locateEpisodePoseTrajectory,
+  rotation6dToMatrix,
   sampleEpisodePoseRotation,
   type EpisodePoseTrajectory,
   type RotationMatrix3,
 } from "@/utils/poseTrajectory3d";
+import {
+  rotationMatrixTo6d,
+  transformTacCapTrackerPose,
+  type TacCapPoseProfile,
+  type TacCapRigidTransform,
+  type TacCapSide,
+} from "@/utils/taccapPoseSemantics";
+
+export type { TacCapSide } from "@/utils/taccapPoseSemantics";
 
 const SERIES_NAME_DELIMITER = " | ";
-
-export type TacCapSide = "left" | "right";
 
 export type TacCapGripperTrack = {
   side: TacCapSide;
@@ -18,6 +26,70 @@ export type TacCapGripperTrack = {
   gripperValues: Array<number | null>;
   gripperRange: { min: number; max: number } | null;
 };
+
+function nearestRotationMatrices(
+  values: NonNullable<EpisodePoseTrajectory["rotationValues"]>,
+): Array<RotationMatrix3 | null> {
+  const matrices = values.map((rotation) =>
+    rotation ? rotation6dToMatrix(rotation) : null,
+  );
+  const previous = new Array<RotationMatrix3 | null>(matrices.length).fill(
+    null,
+  );
+  const next = new Array<RotationMatrix3 | null>(matrices.length).fill(null);
+
+  let nearest: RotationMatrix3 | null = null;
+  for (let index = 0; index < matrices.length; index += 1) {
+    nearest = matrices[index] ?? nearest;
+    previous[index] = nearest;
+  }
+  nearest = null;
+  for (let index = matrices.length - 1; index >= 0; index -= 1) {
+    nearest = matrices[index] ?? nearest;
+    next[index] = nearest;
+  }
+  return matrices.map(
+    (matrix, index) => matrix ?? previous[index] ?? next[index] ?? null,
+  );
+}
+
+/** Apply a body-fixed tracker → TCP transform to a complete trajectory. */
+function transformPoseTrajectory(
+  pose: EpisodePoseTrajectory,
+  correction: TacCapRigidTransform | null,
+): EpisodePoseTrajectory {
+  if (!correction || !pose.rotationValues) return pose;
+
+  const pointCount = Math.min(
+    Math.floor(pose.points.length / 3),
+    pose.rotationValues.length,
+  );
+  const matrices = nearestRotationMatrices(pose.rotationValues);
+  const points = [...pose.points];
+  const rotationValues = [...pose.rotationValues];
+
+  for (let index = 0; index < pointCount; index += 1) {
+    const rawRotation = matrices[index];
+    if (!rawRotation) continue;
+    const offset = index * 3;
+    const transformed = transformTacCapTrackerPose(
+      [points[offset], points[offset + 1], points[offset + 2]],
+      rawRotation,
+      correction,
+    );
+    points[offset] = transformed.position[0];
+    points[offset + 1] = transformed.position[1];
+    points[offset + 2] = transformed.position[2];
+    // Preserve missing rotation samples. The sampler already searches for the
+    // nearest valid orientation, while the corrected position above prevents
+    // a missing sample from creating a 19.5 cm trajectory discontinuity.
+    if (pose.rotationValues[index]) {
+      rotationValues[index] = rotationMatrixTo6d(transformed.rotation);
+    }
+  }
+
+  return { ...pose, points, rotationValues };
+}
 
 export type TacCapGripperFrame = {
   side: TacCapSide;
@@ -87,6 +159,7 @@ function valueRange(
 export function extractTacCapGripperTracks(
   rows: Record<string, number>[],
   preferredSource?: string,
+  poseProfile?: TacCapPoseProfile,
 ): TacCapGripperTrack[] {
   const poses = extractEpisodePoseTrajectories(rows).filter(
     (trajectory) =>
@@ -109,6 +182,10 @@ export function extractTacCapGripperTracks(
       })[0];
     if (!pose) return [];
 
+    const correctedPose = transformPoseTrajectory(
+      pose,
+      poseProfile?.corrections[side] ?? null,
+    );
     const gripperKey = findGripperKey(rows, pose.source, side);
     const gripperValues = gripperKey
       ? rows.flatMap((row) => {
@@ -117,12 +194,12 @@ export function extractTacCapGripperTracks(
           );
           return hasPose ? [finiteNumber(row[gripperKey])] : [];
         })
-      : pose.timestamps.map(() => null);
+      : correctedPose.timestamps.map(() => null);
     return [
       {
         side,
         source: pose.source,
-        pose,
+        pose: correctedPose,
         gripperKey,
         gripperValues,
         gripperRange: valueRange(gripperValues),

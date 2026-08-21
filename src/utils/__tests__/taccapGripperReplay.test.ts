@@ -5,6 +5,11 @@ import {
   sampleTacCapGripperFrame,
   tacCapGripperSources,
 } from "@/utils/taccapGripperReplay";
+import {
+  resolveTacCapPoseProfile,
+  TACCAP_MEASURED_TRACKER_TO_TCP,
+  type TacCapExtrinsicsMetadata,
+} from "@/utils/taccapPoseSemantics";
 
 function poseRow(
   timestamp: number,
@@ -71,5 +76,43 @@ describe("TacCap gripper replay", () => {
     );
     expect(normalizeTacCapGripperOpening(50, { min: 0, max: 100 })).toBe(0.5);
     expect(normalizeTacCapGripperOpening(150, { min: 0, max: 100 })).toBe(1);
+  });
+
+  test("normalizes a legacy tracker trajectory before playback", () => {
+    const rows = [
+      poseRow(0, "action", "left", 0, 0.2),
+      poseRow(1, "action", "left", 1, 0.8),
+    ];
+    const metadata: TacCapExtrinsicsMetadata = {
+      episodes: [
+        {
+          episode_index: 0,
+          poses_are_ee: true,
+          tracker_to_ee: {
+            left: {
+              position_m: [0, 0, 0],
+              quaternion_wxyz: [1, 0, 0, 0],
+            },
+            right: {
+              position_m: [0, 0, 0],
+              quaternion_wxyz: [1, 0, 0, 0],
+            },
+          },
+        },
+      ],
+    };
+    const profile = resolveTacCapPoseProfile(metadata, 0, "tracker-to-tcp");
+    const [track] = extractTacCapGripperTracks(rows, "action", profile);
+    const frame = sampleTacCapGripperFrame(track, 0);
+
+    expect(frame?.position).toEqual([
+      ...TACCAP_MEASURED_TRACKER_TO_TCP.left.translation,
+    ]);
+    frame?.rotation.forEach((value, index) => {
+      expect(value).toBeCloseTo(
+        TACCAP_MEASURED_TRACKER_TO_TCP.left.rotation[index],
+        12,
+      );
+    });
   });
 });

@@ -21,8 +21,8 @@ export type Matrix4Elements = [
 
 /**
  * Fixed root → URDF link4 translations measured by the supplied SolidWorks
- * models. Both datasets record one canonical TCP orientation, so the left
- * URDF's CAD-marker-only -90° link4 rotation is intentionally not included.
+ * models. The bundled left/right URDFs give link4 the same canonical TCP
+ * orientation, so this transform contains translation only.
  */
 export const TACCAP_ROOT_TO_RECORDED_TCP_TRANSLATION: Record<
   TacCapSide,
@@ -41,8 +41,7 @@ export function tacCapDatasetPointToScene(
 
 /**
  * Recorded canonical TCP → model root transform. Its rotation is identity for
- * both sides: the left URDF's local -90° belongs to its CAD marker, not to the
- * physical gripper heading stored by left_tcp.r1-r6.
+ * both sides because both bundled link4 frames share the canonical heading.
  */
 export function tacCapRecordedTcpToRootMatrix(
   side: TacCapSide,

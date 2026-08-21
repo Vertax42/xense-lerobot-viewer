@@ -60,14 +60,14 @@
 
   <link name="link4">
     <visual>
+      <origin xyz="0 0 0" rpy="0 0 -1.5707963267949" />
       <geometry><mesh filename="meshes/link4.STL" /></geometry>
       <material name="shell" />
     </visual>
   </link>
   <joint name="joint4" type="fixed">
-    <origin xyz="0.164636788170065 0 -0.0158499715519367" rpy="0 0 -1.5707963267949" />
+    <origin xyz="0.164636788170065 0 -0.0158499715519367" rpy="0 0 0" />
     <parent link="base_link" />
     <child link="link4" />
   </joint>
 </robot>
-

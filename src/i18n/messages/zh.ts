@@ -762,9 +762,16 @@ export const zh: Record<MessageKey, string> = {
   "urdf.tacCapGripper": "开合数据列",
   "urdf.tacCapOpening": "开合量",
   "urdf.tacCapLink4Note":
-    "TCP 坐标系：+X 向前、+Y 向左、+Z 向上（对应红/绿/蓝参考轴）。播放器定位 link4，并同步驱动 joint1/joint2。",
+    "TCP 坐标系：+X 向前、+Y 向左、+Z 向上（对应红/绿/蓝参考轴）。播放器按数据集姿态元信息定位 TCP，并同步驱动 joint1/joint2。",
   "urdf.tacCapNoPose":
     "未找到可用于 TacCap 回放的完整 left_tcp/right_tcp xyz+r1-r6 轨迹。",
+  "urdf.tacCapPoseMode": "Pose 模式",
+  "urdf.tacCapPoseModeTcpShort": "已是 TCP",
+  "urdf.tacCapPoseModeTrackerShort": "Tracker → TCP",
+  "urdf.tacCapPoseModeHelp":
+    "默认按 TCP 记录值显示；只有手动选择 Tracker → TCP 时才执行外参变换。",
+  "urdf.tacCapPoseCorrected": "姿态：Tracker → TCP 已校正",
+  "urdf.tacCapPoseCanonical": "姿态：标准 TCP",
   "urdf.axisForward": "向前",
   "urdf.axisLeft": "向左",
   "urdf.axisUp": "向上",

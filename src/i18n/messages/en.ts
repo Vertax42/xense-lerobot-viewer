@@ -785,9 +785,16 @@ export const en = {
   "urdf.tacCapGripper": "Opening Column",
   "urdf.tacCapOpening": "Opening",
   "urdf.tacCapLink4Note":
-    "TCP frame: +X forward, +Y left, +Z up (red/green/blue reference axes). The viewer places link4 and drives joint1/joint2 together.",
+    "TCP frame: +X forward, +Y left, +Z up (red/green/blue reference axes). The viewer uses dataset pose metadata to place the TCP and drives joint1/joint2 together.",
   "urdf.tacCapNoPose":
     "No complete left_tcp/right_tcp xyz+r1-r6 trajectories were found for TacCap replay.",
+  "urdf.tacCapPoseMode": "Pose mode",
+  "urdf.tacCapPoseModeTcpShort": "Already TCP",
+  "urdf.tacCapPoseModeTrackerShort": "Tracker → TCP",
+  "urdf.tacCapPoseModeHelp":
+    "Recorded values are treated as TCP by default. The extrinsic transform is applied only after selecting Tracker → TCP.",
+  "urdf.tacCapPoseCorrected": "Pose: Tracker → TCP corrected",
+  "urdf.tacCapPoseCanonical": "Pose: canonical TCP",
   "urdf.axisForward": "forward",
   "urdf.axisLeft": "left",
   "urdf.axisUp": "up",
