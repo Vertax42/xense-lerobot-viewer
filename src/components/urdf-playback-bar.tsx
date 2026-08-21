@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { FaUndoAlt } from "react-icons/fa";
 import { useT } from "@/context/locale-context";
 
 interface UrdfPlaybackBarProps {
@@ -9,6 +10,7 @@ interface UrdfPlaybackBarProps {
   fps: number;
   playing: boolean;
   onPlayPause: () => void;
+  onReplay: () => void;
   trailEnabled: boolean;
   onTrailToggle: () => void;
   onFrameChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -21,6 +23,7 @@ export default function UrdfPlaybackBar({
   fps,
   playing,
   onPlayPause,
+  onReplay,
   trailEnabled,
   onTrailToggle,
   onFrameChange,
@@ -51,6 +54,18 @@ export default function UrdfPlaybackBar({
             <polygon points="2,1 11,7 2,13" fill="white" />
           </svg>
         )}
+      </button>
+
+      {/* Replay from the first frame */}
+      <button
+        type="button"
+        aria-label={t("player.rewind")}
+        title={t("player.rewind")}
+        onClick={onReplay}
+        disabled={disabled}
+        className="w-8 h-8 flex items-center justify-center rounded-md bg-white/5 border border-white/10 text-slate-300 hover:bg-cyan-400/10 hover:border-cyan-400/30 hover:text-cyan-300 disabled:bg-white/5 disabled:border-white/5 disabled:text-slate-500 disabled:cursor-not-allowed transition-colors shrink-0"
+      >
+        <FaUndoAlt aria-hidden="true" size={14} />
       </button>
 
       {/* Trail toggle */}

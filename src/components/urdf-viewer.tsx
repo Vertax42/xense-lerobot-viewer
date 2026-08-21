@@ -1041,7 +1041,7 @@ function RobotScene({
   jointValues: Record<string, number>;
   onJointsLoaded: (names: string[]) => void;
   trailEnabled: boolean;
-  trailResetKey: number;
+  trailResetKey: string;
   scale: number;
 }) {
   const { scene, camera, controls, size } = useThree();
@@ -1495,12 +1495,14 @@ function RobotScene({
 function PlaybackDriver({
   playing,
   fps,
+  replayRevision,
   totalFrames,
   frameRef,
   setFrame,
 }: {
   playing: boolean;
   fps: number;
+  replayRevision: number;
   totalFrames: number;
   frameRef: React.MutableRefObject<number>;
   setFrame: React.Dispatch<React.SetStateAction<number>>;
@@ -1529,7 +1531,7 @@ function PlaybackDriver({
     elapsed.current = 0;
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing, fps, totalFrames, frameRef, setFrame]);
+  }, [playing, fps, replayRevision, totalFrames, frameRef, setFrame]);
   return null;
 }
 
@@ -1698,6 +1700,7 @@ export default function URDFViewer({
   // Playback
   const [frame, setFrame] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [replayRevision, setReplayRevision] = useState(0);
   const [tacCapModelsReady, setTacCapModelsReady] = useState(false);
   const frameRef = useRef(0);
 
@@ -1705,6 +1708,7 @@ export default function URDFViewer({
     setFrame(0);
     frameRef.current = 0;
     setPlaying(false);
+    setReplayRevision(0);
   }, [selectedEpisode]);
 
   useEffect(() => {
@@ -1761,6 +1765,13 @@ export default function URDFViewer({
       return !prev;
     });
   }, [frame, playbackDisabled]);
+
+  const handleReplay = useCallback(() => {
+    if (playbackDisabled) return;
+    frameRef.current = 0;
+    setFrame(0);
+    setReplayRevision((revision) => revision + 1);
+  }, [playbackDisabled]);
 
   useEffect(() => {
     if (playToggleRef) playToggleRef.current = handlePlayPause;
@@ -1973,7 +1984,7 @@ export default function URDFViewer({
                 jointValues={jointValues}
                 onJointsLoaded={onJointsLoaded}
                 trailEnabled={trailEnabled}
-                trailResetKey={selectedEpisode}
+                trailResetKey={`${selectedEpisode}:${replayRevision}`}
                 scale={scale}
               />
               <Grid
@@ -1996,6 +2007,7 @@ export default function URDFViewer({
           <PlaybackDriver
             playing={playing}
             fps={fps}
+            replayRevision={replayRevision}
             totalFrames={totalFrames}
             frameRef={frameRef}
             setFrame={setFrame}
@@ -2005,6 +2017,7 @@ export default function URDFViewer({
           active={active}
           episodeTimeSeconds={replayTimeSeconds}
           playing={playing}
+          replayRevision={replayRevision}
           videos={data.videosInfo}
         />
         {trajectoryUnavailable && (
@@ -2026,6 +2039,7 @@ export default function URDFViewer({
           fps={fps}
           playing={playing}
           onPlayPause={handlePlayPause}
+          onReplay={handleReplay}
           trailEnabled={trailEnabled}
           onTrailToggle={() => setTrailEnabled((v) => !v)}
           onFrameChange={handleFrameChange}
