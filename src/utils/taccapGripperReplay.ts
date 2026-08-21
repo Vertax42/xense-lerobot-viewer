@@ -27,6 +27,17 @@ export type TacCapGripperTrack = {
   gripperRange: { min: number; max: number } | null;
 };
 
+export type TacCapHeadTrack = {
+  source: string;
+  pose: EpisodePoseTrajectory;
+};
+
+export type TacCapHeadFrame = {
+  source: string;
+  position: [number, number, number];
+  rotation: RotationMatrix3;
+};
+
 function nearestRotationMatrices(
   values: NonNullable<EpisodePoseTrajectory["rotationValues"]>,
 ): Array<RotationMatrix3 | null> {
@@ -208,6 +219,33 @@ export function extractTacCapGripperTracks(
   });
 }
 
+/**
+ * Pick the complete `head.xyz+r1-r6` trajectory that belongs to the selected
+ * source. Video keys containing "head" do not imply that a head pose exists.
+ */
+export function extractTacCapHeadTrack(
+  rows: Record<string, number>[],
+  preferredSource?: string,
+): TacCapHeadTrack | null {
+  const pose = extractEpisodePoseTrajectories(rows)
+    .filter(
+      (trajectory) =>
+        trajectory.label.toLowerCase() === "head" &&
+        trajectory.rotationValues?.some((rotation) => rotation !== null),
+    )
+    .sort((a, b) => {
+      const preferredDifference =
+        Number(b.source === preferredSource) -
+        Number(a.source === preferredSource);
+      return (
+        preferredDifference ||
+        sourcePriority(a.source) - sourcePriority(b.source)
+      );
+    })[0];
+
+  return pose ? { source: pose.source, pose } : null;
+}
+
 export function tacCapGripperSources(rows: Record<string, number>[]): string[] {
   return [
     ...new Set(
@@ -289,5 +327,20 @@ export function sampleTacCapGripperFrame(
     position: location.point,
     rotation,
     opening: normalizeTacCapGripperOpening(rawOpening, track.gripperRange),
+  };
+}
+
+export function sampleTacCapHeadFrame(
+  track: TacCapHeadTrack,
+  timeSeconds: number,
+): TacCapHeadFrame | null {
+  const location = locateEpisodePoseTrajectory(track.pose, timeSeconds);
+  const rotation = sampleEpisodePoseRotation(track.pose, timeSeconds);
+  if (!location || !rotation) return null;
+
+  return {
+    source: track.source,
+    position: location.point,
+    rotation,
   };
 }

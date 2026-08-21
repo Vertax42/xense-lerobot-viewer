@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   extractTacCapGripperTracks,
+  extractTacCapHeadTrack,
   normalizeTacCapGripperOpening,
   sampleTacCapGripperFrame,
+  sampleTacCapHeadFrame,
   tacCapGripperSources,
 } from "@/utils/taccapGripperReplay";
 import {
@@ -31,6 +33,26 @@ function poseRow(
     [`${prefix}.r5`]: 1,
     [`${prefix}.r6`]: 0,
     [`${source} | ${side}_gripper.pos`]: gripper,
+  };
+}
+
+function headPoseRow(
+  timestamp: number,
+  source: "action" | "observation.state",
+  x: number,
+): Record<string, number> {
+  const prefix = `${source} | head`;
+  return {
+    timestamp,
+    [`${prefix}.x`]: x,
+    [`${prefix}.y`]: 2,
+    [`${prefix}.z`]: 3,
+    [`${prefix}.r1`]: 1,
+    [`${prefix}.r2`]: 0,
+    [`${prefix}.r3`]: 0,
+    [`${prefix}.r4`]: 0,
+    [`${prefix}.r5`]: 1,
+    [`${prefix}.r6`]: 0,
   };
 }
 
@@ -68,6 +90,41 @@ describe("TacCap gripper replay", () => {
       rotation: [1, 0, 0, 0, 1, 0, 0, 0, 1],
       opening: 0.5,
     });
+  });
+
+  test("extracts and samples an optional head pose independently", () => {
+    const rows = [
+      {
+        ...poseRow(0, "action", "left", 0, 0.2),
+        ...headPoseRow(0, "observation.state", 10),
+        ...headPoseRow(0, "action", 0),
+      },
+      {
+        ...poseRow(1, "action", "left", 1, 0.8),
+        ...headPoseRow(1, "observation.state", 11),
+        ...headPoseRow(1, "action", 1),
+      },
+    ];
+
+    const actionHead = extractTacCapHeadTrack(rows, "action");
+    expect(actionHead?.source).toBe("action");
+    expect(sampleTacCapHeadFrame(actionHead!, 0.5)).toEqual({
+      source: "action",
+      position: [0.5, 2, 3],
+      rotation: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+    });
+
+    expect(extractTacCapHeadTrack(rows, "observation.state")?.source).toBe(
+      "observation.state",
+    );
+  });
+
+  test("does not invent a head trajectory when only gripper poses exist", () => {
+    const rows = [
+      poseRow(0, "action", "left", 0, 0.2),
+      poseRow(1, "action", "left", 1, 0.8),
+    ];
+    expect(extractTacCapHeadTrack(rows, "action")).toBeNull();
   });
 
   test("keeps native unit values and scales non-unit encoder ranges", () => {

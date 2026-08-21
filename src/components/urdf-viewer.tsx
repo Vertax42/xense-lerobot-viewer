@@ -26,13 +26,20 @@ import { isTacCapRobot } from "@/lib/so101-robot";
 import { CHART_CONFIG } from "@/utils/constants";
 import {
   extractTacCapGripperTracks,
+  extractTacCapHeadTrack,
   sampleTacCapGripperFrame,
+  sampleTacCapHeadFrame,
   tacCapGripperSources,
   type TacCapGripperFrame,
   type TacCapGripperTrack,
+  type TacCapHeadFrame,
+  type TacCapHeadTrack,
   type TacCapSide,
 } from "@/utils/taccapGripperReplay";
-import { locateEpisodePoseTrajectory } from "@/utils/poseTrajectory3d";
+import {
+  locateEpisodePoseTrajectory,
+  type EpisodePoseTrajectory,
+} from "@/utils/poseTrajectory3d";
 import {
   tacCapDatasetPointToScene,
   tacCapRecordedTcpSceneMatrix,
@@ -270,6 +277,12 @@ const TACCAP_TRAIL_COLOR: Record<TacCapSide, string> = {
   left: "#22d3ee",
   right: "#f472b6",
 };
+const TACCAP_HEAD_COLOR = "#facc15";
+const TACCAP_LOCAL_POSE_AXES = [
+  { label: "X", direction: [1, 0, 0] as const, color: "#ef4444" },
+  { label: "Y", direction: [0, 1, 0] as const, color: "#22c55e" },
+  { label: "Z", direction: [0, 0, 1] as const, color: "#3b82f6" },
+] as const;
 const TACCAP_WORLD_AXES = [
   {
     label: "+X",
@@ -422,15 +435,22 @@ function TacCapWorldAxes({
   );
 }
 
-function tacCapSceneBounds(tracks: TacCapGripperTrack[]): SceneBounds {
+function tacCapSceneBounds(
+  tracks: TacCapGripperTrack[],
+  headTrack: TacCapHeadTrack | null,
+): SceneBounds {
   const min = new THREE.Vector3(Infinity, Infinity, Infinity);
   const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
-  for (const track of tracks) {
-    for (let index = 0; index + 2 < track.pose.points.length; index += 3) {
+  const poses = [
+    ...tracks.map((track) => track.pose),
+    ...(headTrack ? [headTrack.pose] : []),
+  ];
+  for (const pose of poses) {
+    for (let index = 0; index + 2 < pose.points.length; index += 3) {
       const point = tacCapDatasetPointToScene([
-        track.pose.points[index],
-        track.pose.points[index + 1],
-        track.pose.points[index + 2],
+        pose.points[index],
+        pose.points[index + 1],
+        pose.points[index + 2],
       ]);
       min.min(new THREE.Vector3(...point));
       max.max(new THREE.Vector3(...point));
@@ -601,22 +621,24 @@ function TacCapGripperModel({
   return null;
 }
 
-function TacCapTrackTrail({
+function TacCapPoseTrail({
+  color,
   enabled,
+  pose,
   timeSeconds,
-  track,
 }: {
+  color: string;
   enabled: boolean;
+  pose: EpisodePoseTrajectory;
   timeSeconds: number;
-  track: TacCapGripperTrack;
 }) {
   const resources = useMemo(() => {
-    const positions = new Float32Array(track.pose.points.length);
-    for (let index = 0; index + 2 < track.pose.points.length; index += 3) {
+    const positions = new Float32Array(pose.points.length);
+    for (let index = 0; index + 2 < pose.points.length; index += 3) {
       const scenePoint = tacCapDatasetPointToScene([
-        track.pose.points[index],
-        track.pose.points[index + 1],
-        track.pose.points[index + 2],
+        pose.points[index],
+        pose.points[index + 1],
+        pose.points[index + 2],
       ]);
       positions[index] = scenePoint[0];
       positions[index + 1] = scenePoint[1];
@@ -626,7 +648,7 @@ function TacCapTrackTrail({
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geometry.setDrawRange(0, 0);
     const material = new THREE.LineBasicMaterial({
-      color: TACCAP_TRAIL_COLOR[track.side],
+      color,
       transparent: true,
       opacity: 0.85,
       depthWrite: false,
@@ -637,7 +659,7 @@ function TacCapTrackTrail({
     line.raycast = () => undefined;
     line.renderOrder = 2;
     return { geometry, line, material };
-  }, [track]);
+  }, [color, pose]);
 
   useLayoutEffect(() => {
     if (!enabled) {
@@ -645,10 +667,10 @@ function TacCapTrackTrail({
       return;
     }
     const start = locateEpisodePoseTrajectory(
-      track.pose,
+      pose,
       Math.max(0, timeSeconds - TRAIL_DURATION),
     );
-    const end = locateEpisodePoseTrajectory(track.pose, timeSeconds);
+    const end = locateEpisodePoseTrajectory(pose, timeSeconds);
     if (!start || !end) {
       resources.geometry.setDrawRange(0, 0);
       return;
@@ -659,7 +681,7 @@ function TacCapTrackTrail({
       startIndex,
       Math.max(0, endIndex - startIndex + 1),
     );
-  }, [enabled, resources, timeSeconds, track]);
+  }, [enabled, pose, resources, timeSeconds]);
 
   useEffect(
     () => () => {
@@ -672,21 +694,70 @@ function TacCapTrackTrail({
   return <primitive object={resources.line} />;
 }
 
+function TacCapHeadMarker({
+  frame,
+  size,
+}: {
+  frame: TacCapHeadFrame | null;
+  size: number;
+}) {
+  const transform = useMemo(
+    () =>
+      frame
+        ? new THREE.Matrix4().set(
+            ...tacCapRecordedTcpSceneMatrix(frame.position, frame.rotation),
+          )
+        : null,
+    [frame],
+  );
+  if (!transform) return null;
+
+  const axisLength = size * 2.6;
+  return (
+    <group matrix={transform} matrixAutoUpdate={false}>
+      <mesh>
+        <sphereGeometry args={[size, 16, 12]} />
+        <meshBasicMaterial color={TACCAP_HEAD_COLOR} toneMapped={false} />
+      </mesh>
+      {TACCAP_LOCAL_POSE_AXES.map((axis) => (
+        <TacCapAxisArrow key={axis.label} length={axisLength} {...axis} />
+      ))}
+      <Html
+        center
+        position={[0, size * 4.5, 0]}
+        style={{ pointerEvents: "none" }}
+        zIndexRange={[10, 0]}
+      >
+        <span className="rounded border border-yellow-300/30 bg-slate-950/90 px-1.5 py-0.5 font-mono text-[9px] font-semibold leading-none text-yellow-300 shadow">
+          head
+        </span>
+      </Html>
+    </group>
+  );
+}
+
 function TacCapGripperScene({
   frames,
+  headFrame,
+  headTrack,
   onReadyChange,
   timeSeconds,
   tracks,
   trailEnabled,
 }: {
   frames: TacCapGripperFrame[];
+  headFrame: TacCapHeadFrame | null;
+  headTrack: TacCapHeadTrack | null;
   onReadyChange: (ready: boolean) => void;
   timeSeconds: number;
   tracks: TacCapGripperTrack[];
   trailEnabled: boolean;
 }) {
   const [readySides, setReadySides] = useState<Set<TacCapSide>>(new Set());
-  const bounds = useMemo(() => tacCapSceneBounds(tracks), [tracks]);
+  const bounds = useMemo(
+    () => tacCapSceneBounds(tracks, headTrack),
+    [headTrack, tracks],
+  );
   const frameBySide = useMemo(
     () => new Map(frames.map((frame) => [frame.side, frame])),
     [frames],
@@ -722,13 +793,26 @@ function TacCapGripperScene({
         />
       ))}
       {tracks.map((track) => (
-        <TacCapTrackTrail
+        <TacCapPoseTrail
           key={`trail:${track.side}`}
+          color={TACCAP_TRAIL_COLOR[track.side]}
           enabled={trailEnabled}
+          pose={track.pose}
           timeSeconds={timeSeconds}
-          track={track}
         />
       ))}
+      {headTrack && (
+        <TacCapPoseTrail
+          color={TACCAP_HEAD_COLOR}
+          enabled={trailEnabled}
+          pose={headTrack.pose}
+          timeSeconds={timeSeconds}
+        />
+      )}
+      <TacCapHeadMarker
+        frame={headFrame}
+        size={Math.max(0.006, Math.min(0.014, bounds.extent * 0.012))}
+      />
       <Grid
         args={[gridSize, gridSize]}
         position={[bounds.center.x, gridY, bounds.center.z]}
@@ -1404,6 +1488,10 @@ export default function URDFViewer({
         : [],
     [chartData, isTacCap, selectedGroup, tacCapPoseProfile],
   );
+  const tacCapHeadTrack = useMemo(
+    () => (isTacCap ? extractTacCapHeadTrack(chartData, selectedGroup) : null),
+    [chartData, isTacCap, selectedGroup],
+  );
 
   // Joint mapping
   const autoMapping = useMemo(
@@ -1452,6 +1540,13 @@ export default function URDFViewer({
         return sampled ? [sampled] : [];
       }),
     [replayTimeSeconds, tacCapTracks],
+  );
+  const tacCapHeadFrame = useMemo(
+    () =>
+      tacCapHeadTrack
+        ? sampleTacCapHeadFrame(tacCapHeadTrack, replayTimeSeconds)
+        : null,
+    [replayTimeSeconds, tacCapHeadTrack],
   );
   const tacCapDataUnavailable =
     isTacCap && tacCapProfileReady && tacCapTracks.length === 0;
@@ -1665,6 +1760,8 @@ export default function URDFViewer({
           {isTacCap && tacCapProfileReady ? (
             <TacCapGripperScene
               frames={tacCapFrames}
+              headFrame={tacCapHeadFrame}
+              headTrack={tacCapHeadTrack}
               onReadyChange={setTacCapModelsReady}
               timeSeconds={replayTimeSeconds}
               tracks={tacCapTracks}
@@ -1836,6 +1933,21 @@ export default function URDFViewer({
                         </tr>
                       );
                     })}
+                    {tacCapHeadTrack && (
+                      <tr className="border-t border-white/10/50">
+                        <td className="px-1 py-0.5 text-yellow-300">head</td>
+                        <td className="px-1 py-0.5 font-mono text-slate-400">
+                          {tacCapHeadTrack.source} ·{" "}
+                          {tacCapHeadTrack.pose.label}
+                        </td>
+                        <td className="px-1 py-0.5 font-mono text-slate-600">
+                          —
+                        </td>
+                        <td className="px-1 py-0.5 text-right font-mono text-slate-600">
+                          —
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
                 <p className="mt-2 text-[11px] text-slate-500">
