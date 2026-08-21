@@ -97,51 +97,36 @@ const Sidebar: React.FC<SidebarProps> = ({
             }`;
             return (
               <li key={episode}>
-                {onEpisodeSelect ? (
-                  <div className={itemClass}>
+                <div className={itemClass}>
+                  {onEpisodeSelect ? (
                     <button
                       onClick={() => onEpisodeSelect(episode)}
                       className="flex-1 text-left"
                     >
                       {t("nav.episodeItem", { index: episode })}
                     </button>
-                    <button
-                      onClick={() => toggle(episode)}
-                      className={`text-xs leading-none transition-colors ${
-                        flagged.has(episode)
-                          ? "text-orange-400 hover:text-orange-300"
-                          : "text-slate-600 hover:text-slate-400 opacity-0 group-hover:opacity-100"
-                      }`}
-                      title={
-                        flagged.has(episode) ? t("nav.unflag") : t("nav.flag")
-                      }
-                    >
-                      ⚑
-                    </button>
-                  </div>
-                ) : (
-                  <div className={itemClass}>
+                  ) : (
                     <Link
                       href={routePathFromRepoId(datasetInfo.repoId, episode)}
                       className="flex-1 text-left"
                     >
                       {t("nav.episodeItem", { index: episode })}
                     </Link>
-                    <button
-                      onClick={() => toggle(episode)}
-                      className={`text-xs leading-none transition-colors ${
-                        flagged.has(episode)
-                          ? "text-orange-400 hover:text-orange-300"
-                          : "text-slate-600 hover:text-slate-400 opacity-0 group-hover:opacity-100"
-                      }`}
-                      title={
-                        flagged.has(episode) ? t("nav.unflag") : t("nav.flag")
-                      }
-                    >
-                      ⚑
-                    </button>
-                  </div>
-                )}
+                  )}
+                  <button
+                    onClick={() => toggle(episode)}
+                    className={`text-xs leading-none transition-colors ${
+                      flagged.has(episode)
+                        ? "text-orange-400 hover:text-orange-300"
+                        : "text-slate-600 hover:text-slate-400 opacity-0 group-hover:opacity-100"
+                    }`}
+                    title={
+                      flagged.has(episode) ? t("nav.unflag") : t("nav.flag")
+                    }
+                  >
+                    ⚑
+                  </button>
+                </div>
               </li>
             );
           })}
